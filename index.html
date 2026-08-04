@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>Doctor Mark Account Setup</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --deep: #032b35;
+      --deep2: #0b4a55;
+      --gold: #9a741d;
+      --ink: #162b32;
+      --soft: #edf5f6;
+      --danger: #8b1e2d;
+      --success: #176b45;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      font-family: system-ui, "Segoe UI", sans-serif;
+      background: linear-gradient(135deg, var(--deep), var(--deep2));
+      color: var(--ink);
+    }
+    .card {
+      width: min(94vw, 540px);
+      padding: 30px;
+      border-radius: 22px;
+      background: #fff;
+      box-shadow: 0 20px 70px #0007;
+    }
+    h1 { margin: 0 0 8px; font-size: clamp(28px, 7vw, 42px); }
+    .gold { color: var(--gold); }
+    p { line-height: 1.5; }
+    .message {
+      margin: 16px 0;
+      padding: 14px;
+      border-radius: 12px;
+      background: var(--soft);
+      white-space: pre-wrap;
+    }
+    .message.error { background: #fff0f1; color: var(--danger); }
+    .message.success { background: #ecf8f2; color: var(--success); }
+    label { display: block; margin-top: 13px; font-weight: 700; }
+    input, button {
+      width: 100%;
+      margin-top: 7px;
+      padding: 14px;
+      border-radius: 11px;
+      font-size: 16px;
+    }
+    input { border: 1px solid #9aa; }
+    button {
+      border: 0;
+      margin-top: 17px;
+      background: var(--deep);
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    button:disabled { opacity: .65; cursor: wait; }
+    .legal { margin-top: 20px; font-size: 12px; color: #566; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Doctor Mark <span class="gold">Account Setup</span></h1>
+    <p>Create a private password for your approved account.</p>
+
+    <div id="message" class="message">Checking the secure email link…</div>
+
+    <form id="form" hidden>
+      <label for="password">New password</label>
+      <input
+        id="password"
+        type="password"
+        minlength="12"
+        required
+        autocomplete="new-password"
+      >
+
+      <label for="confirm">Confirm password</label>
+      <input
+        id="confirm"
+        type="password"
+        minlength="12"
+        required
+        autocomplete="new-password"
+      >
+
+      <button id="save" type="submit">Save password</button>
+    </form>
+
+    <p class="legal">
+      This account is licensed for one approved physical device.
+      The applications and educational content are not for redistribution.
+    </p>
+  </main>
+
+  <script>
+    const PROJECT_URL = ;
+    const PUBLISHABLE_KEY = ;
+
+    const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
+    const query = new URLSearchParams(location.search);
+
+    const accessToken = fragment.get("access_token");
+    const linkType = fragment.get("type") || query.get("type");
+    const errorCode =
+      fragment.get("error_code") ||
+      query.get("error_code") ||
+      fragment.get("error") ||
+      query.get("error");
+
+    const errorDescription =
+      fragment.get("error_description") ||
+      query.get("error_description");
+
+    const message = document.getElementById("message");
+    const form = document.getElementById("form");
+    const save = document.getElementById("save");
+
+    function show(text, type) {
+      message.textContent = text;
+      message.className = "message" + (type ? " " + type : "");
+    }
+
+    if (errorCode || !accessToken) {
+      const expired =
+        errorCode === "otp_expired" ||
+        /expired/i.test(errorDescription || "");
+
+      show(
+        expired
+          ? "This email link has expired or was already used. Return to the Doctor Mark app and request a new password email, or ask Dr Mark to resend access."
+          : "This email link is invalid or incomplete. Return to the Doctor Mark app and request a new email.",
+        "error"
+      );
+    } else {
+      show(
+        linkType === "recovery"
+          ? "Choose your new Doctor Mark app password."
+          : "Invitation verified. Choose your private Doctor Mark app password."
+      );
+      form.hidden = false;
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const password = document.getElementById("password").value;
+      const confirm = document.getElementById("confirm").value;
+
+      if (password.length < 12) {
+        show("Use at least 12 characters.", "error");
+        return;
+      }
+
+      if (password !== confirm) {
+        show("The two passwords do not match.", "error");
+        return;
+      }
+
+      save.disabled = true;
+      show("Saving your password…");
+
+      try {
+        const response = await fetch(PROJECT_URL + "/auth/v1/user", {
+          method: "PUT",
+          headers: {
+            apikey: PUBLISHABLE_KEY,
+            Authorization: "Bearer " + accessToken,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ password })
+        });
+
+        let data = {};
+        try {
+          data = await response.json();
+        } catch (_) {}
+
+        if (!response.ok) {
+          throw new Error(
+            data.msg ||
+            data.message ||
+            data.error_description ||
+            "Password update failed."
+          );
+        }
+
+        form.hidden = true;
+        history.replaceState({}, document.title, location.pathname);
+        show(
+          "Password saved successfully. Close this page and sign in to the Doctor Mark app using your email and the password you just created.",
+          "success"
+        );
+      } catch (error) {
+        save.disabled = false;
+        show(
+          "Could not save the password: " + error.message,
+          "error"
+        );
+      }
+    });
+  </script>
+</body>
+</html>
