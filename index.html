@@ -34,7 +34,11 @@
       background: #fff;
       box-shadow: 0 20px 70px #0007;
     }
-    h1 { margin: 0 0 8px; font-size: clamp(28px, 7vw, 42px); }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 7vw, 42px);
+      line-height: 1.08;
+    }
     .gold { color: var(--gold); }
     p { line-height: 1.5; }
     .message {
@@ -103,58 +107,109 @@
   </main>
 
   <script>
-    const PROJECT_URL = ;
-    const PUBLISHABLE_KEY = ;
+    "use strict";
 
-    const fragment = new URLSearchParams(location.hash.replace(/^#/, ""));
-    const query = new URLSearchParams(location.search);
+    const PROJECT_URL =
+      "https://jmheltndxoiyymglewxn.supabase.co";
 
-    const accessToken = fragment.get("access_token");
-    const linkType = fragment.get("type") || query.get("type");
-    const errorCode =
-      fragment.get("error_code") ||
-      query.get("error_code") ||
-      fragment.get("error") ||
-      query.get("error");
-
-    const errorDescription =
-      fragment.get("error_description") ||
-      query.get("error_description");
+    const PUBLISHABLE_KEY =
+      "sb_publishable_VSZUKxCNe42zmka9OFJePA_9T8CiACv";
 
     const message = document.getElementById("message");
     const form = document.getElementById("form");
     const save = document.getElementById("save");
 
-    function show(text, type) {
+    function show(text, type = "") {
       message.textContent = text;
       message.className = "message" + (type ? " " + type : "");
     }
 
-    if (errorCode || !accessToken) {
-      const expired =
-        errorCode === "otp_expired" ||
-        /expired/i.test(errorDescription || "");
+    function readLink() {
+      const fragment = new URLSearchParams(
+        location.hash.replace(/^#/, "")
+      );
+      const query = new URLSearchParams(location.search);
 
-      show(
-        expired
-          ? "This email link has expired or was already used. Return to the Doctor Mark app and request a new password email, or ask Dr Mark to resend access."
-          : "This email link is invalid or incomplete. Return to the Doctor Mark app and request a new email.",
-        "error"
-      );
-    } else {
-      show(
-        linkType === "recovery"
-          ? "Choose your new Doctor Mark app password."
-          : "Invitation verified. Choose your private Doctor Mark app password."
-      );
-      form.hidden = false;
+      return {
+        accessToken:
+          fragment.get("access_token") ||
+          query.get("access_token"),
+
+        type:
+          fragment.get("type") ||
+          query.get("type") ||
+          "invite",
+
+        error:
+          fragment.get("error_code") ||
+          query.get("error_code") ||
+          fragment.get("error") ||
+          query.get("error"),
+
+        description:
+          fragment.get("error_description") ||
+          query.get("error_description") ||
+          ""
+      };
+    }
+
+    function initialise() {
+      try {
+        const link = readLink();
+
+        if (link.error) {
+          const expired =
+            link.error === "otp_expired" ||
+            /expired|already used/i.test(link.description);
+
+          show(
+            expired
+              ? "This email link has expired or was already used. Request a fresh password email from the Doctor Mark app."
+              : "This email link could not be verified: " +
+                (link.description || link.error),
+            "error"
+          );
+
+          form.hidden = true;
+          return;
+        }
+
+        if (!link.accessToken) {
+          show(
+            "This email link is incomplete or has already been consumed. Request a fresh password email from the Doctor Mark app.",
+            "error"
+          );
+
+          form.hidden = true;
+          return;
+        }
+
+        window.doctorMarkAccessToken = link.accessToken;
+
+        show(
+          link.type === "recovery"
+            ? "Choose your new Doctor Mark app password."
+            : "Invitation verified. Choose your private Doctor Mark app password."
+        );
+
+        form.hidden = false;
+      } catch (_) {
+        show(
+          "The secure link could not be read. Request a fresh password email.",
+          "error"
+        );
+        form.hidden = true;
+      }
     }
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
 
-      const password = document.getElementById("password").value;
-      const confirm = document.getElementById("confirm").value;
+      const password =
+        document.getElementById("password").value;
+
+      const confirm =
+        document.getElementById("confirm").value;
 
       if (password.length < 12) {
         show("Use at least 12 characters.", "error");
@@ -166,21 +221,36 @@
         return;
       }
 
+      const accessToken = window.doctorMarkAccessToken;
+
+      if (!accessToken) {
+        show(
+          "The secure session is missing. Request a fresh password email.",
+          "error"
+        );
+        form.hidden = true;
+        return;
+      }
+
       save.disabled = true;
       show("Saving your password…");
 
       try {
-        const response = await fetch(PROJECT_URL + "/auth/v1/user", {
-          method: "PUT",
-          headers: {
-            apikey: PUBLISHABLE_KEY,
-            Authorization: "Bearer " + accessToken,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({ password })
-        });
+        const response = await fetch(
+          PROJECT_URL + "/auth/v1/user",
+          {
+            method: "PUT",
+            headers: {
+              apikey: PUBLISHABLE_KEY,
+              Authorization: "Bearer " + accessToken,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ password })
+          }
+        );
 
         let data = {};
+
         try {
           data = await response.json();
         } catch (_) {}
@@ -194,20 +264,34 @@
           );
         }
 
+        window.doctorMarkAccessToken = null;
         form.hidden = true;
-        history.replaceState({}, document.title, location.pathname);
+
+        history.replaceState(
+          {},
+          document.title,
+          location.pathname
+        );
+
         show(
           "Password saved successfully. Close this page and sign in to the Doctor Mark app using your email and the password you just created.",
           "success"
         );
       } catch (error) {
         save.disabled = false;
+
         show(
-          "Could not save the password: " + error.message,
+          "Could not save the password: " +
+          (error && error.message
+            ? error.message
+            : "Unknown error"),
           "error"
         );
       }
     });
+
+    window.addEventListener("hashchange", initialise);
+    initialise();
   </script>
 </body>
 </html>
