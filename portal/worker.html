@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Dr Mark Checker Worker</title>
+  <link rel="stylesheet" href="worker.css">
+</head>
+<body>
+  <main class="worker-shell">
+    <header class="worker-head">
+      <div>
+        <p class="eyebrow">DR MARK PAPER CHECKER</p>
+        <h1>Examiner Workspace</h1>
+        <p class="muted">This secure link is limited to one submitted paper and expires automatically.</p>
+      </div>
+      <span id="status" class="status">Opening</span>
+    </header>
+
+    <section id="loading" class="panel">Loading submission...</section>
+    <section id="error" class="panel error" hidden></section>
+
+    <div id="workspace" hidden>
+      <section class="panel">
+        <div class="meta-grid">
+          <div><span>Submission</span><b id="jobId"></b></div>
+          <div><span>Student</span><b id="student"></b></div>
+          <div><span>Subject</span><b id="subject"></b></div>
+          <div><span>Paper</span><b id="paper"></b></div>
+        </div>
+        <div id="hintWrap" class="hint" hidden><span>Paper hint</span><p id="hint"></p></div>
+        <a id="sourceLink" class="button primary" href="#" target="_blank" rel="noopener">Download submitted paper</a>
+      </section>
+
+      <section class="panel">
+        <h2>Checking status</h2>
+        <div class="actions">
+          <button type="button" data-status="checking">Checking</button>
+          <button type="button" data-status="preparing_report">Preparing report</button>
+          <button type="button" data-status="manual_review">Manual review required</button>
+          <button type="button" data-status="failed">Failed</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Return checked report</h2>
+        <form id="resultForm">
+          <label>Checked PDF
+            <input id="resultFile" type="file" accept=".pdf,application/pdf" required>
+          </label>
+          <div class="two">
+            <label>Mark awarded
+              <input id="mark" type="number" min="0" step="any">
+            </label>
+            <label>Total mark
+              <input id="total" type="number" min="0" step="any">
+            </label>
+          </div>
+          <label>Message to student
+            <textarea id="message" rows="4" placeholder="Optional"></textarea>
+          </label>
+          <button id="completeBtn" class="button primary" type="submit">Upload report and complete</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1"></script>
+  <script src="config.js"></script>
+  <script src="worker.js"></script>
+</body>
+</html>
