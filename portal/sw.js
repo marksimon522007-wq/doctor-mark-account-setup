@@ -1,5 +1,5 @@
 /* Cache only anonymous site shell. Student data, API calls and passwords are never cached here. */
-const VERSION='drmark-whatsapp-v6';
+const VERSION='drmark-whatsapp-v7-delete-sync';
 const STATIC=['./','./index.html','./styles.css','./app.js','./chromosome-motion.js','./config.js','./assets/k_chromosome.png','./manifest.webmanifest'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(VERSION).then(cache=>cache.addAll(STATIC)).catch(()=>{}));
