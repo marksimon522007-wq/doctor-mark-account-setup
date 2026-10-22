@@ -1,8 +1,25 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/+esm';
 
 const CFG = window.DR_MARK_CONFIG;
+// Keep each browser tab's login independent. Supabase normally shares its auth
+// session in localStorage, which let a student test tab replace the teacher JWT
+// while the teacher dashboard was still open, triggering a correct RLS denial.
+// sessionStorage survives page refreshes but cannot overwrite another tab's login.
+const authStorage = window.sessionStorage;
+const tabIdentityKey = 'drmark.portal.auth-tab-id.v2';
+let tabIdentity = authStorage.getItem(tabIdentityKey);
+if (!tabIdentity) {
+  tabIdentity = window.crypto.randomUUID();
+  authStorage.setItem(tabIdentityKey, tabIdentity);
+}
 const sb = createClient(CFG.supabaseUrl, CFG.publishableKey, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storage: authStorage,
+    storageKey: `drmark-portal-${tabIdentity}`
+  }
 });
 const root = document.getElementById('app');
 const modalRoot = document.getElementById('modal');
@@ -276,7 +293,23 @@ async function newStudent(form){
   if(error||!data?.ok)throw Error(data?.error||error?.message||'Could not create this account.');
   await reload();credentialsModal(code,pin,name);
 }
+// A tab that was opened as teacher must never send a write with a student's JWT.
+// RLS remains the final authorization boundary; this provides a helpful error.
+async function requireMatchingPortalSession(expectedRole) {
+  if (!state.user || state.profile?.role !== expectedRole) {
+    throw Error('Please sign in with the correct portal account and try again.');
+  }
+  const {data,error} = await sb.auth.getUser();
+  if (error || !data?.user || data.user.id !== state.user.id) {
+    closeModal();
+    await sb.auth.signOut();
+    state.user=null;state.profile=null;state.student=null;
+    showLogin('Your signed-in account changed. Please sign in again to continue.');
+    throw Error('The signed-in account changed. Please log in again before saving.');
+  }
+}
 async function createOrEditHomework(form){
+  await requireMatchingPortalSession('teacher');
   const fd=new FormData(form), id=text(form.getAttribute('data-id')),
     title=text(fd.get('title')),due_at=localISO(text(fd.get('date')),text(fd.get('time'))),
     link=text(fd.get('external_link'));
@@ -300,6 +333,7 @@ async function studentSubmit(checkbox){
   checkbox.disabled=true;
   const note=text($('note-'+id)?.value).slice(0,1500);
   try{
+    await requireMatchingPortalSession('student');
     ok(await sb.from('portal_submissions').insert({assignment_id:id,student_id:state.student.id,attempt_no:1,note:note||null,status:'submitted'}));
     await reload();toast('Another promise kept, '+dr(state.student.name)+'.');
   }catch(e){checkbox.disabled=false;checkbox.checked=false;toast(errorText(e),true);}
