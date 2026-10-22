@@ -99,3 +99,25 @@ body { background:radial-gradient(820px 550px at 83% -8%,#36281975,transparent 7
 /* Remain physically anchored at rest; only the decorative orbit keeps moving. */
 .cm-settled { transform:none!important; animation:none!important; }
 @media(prefers-reduced-motion:reduce) { .cm-floating {animation:none!important;} }
+
+
+/* Irreversible actions are intentionally red, distinct from ordinary controls. */
+.button.danger.destructive{
+  border-color:#ba5959;
+  color:#ffe4e4;
+  background:linear-gradient(120deg,#792829,#5d1c24);
+}
+.button.danger.destructive:hover:not(:disabled){
+  border-color:#ff9898;
+  background:linear-gradient(120deg,#913233,#722530);
+}
+.destructive-warning{
+  display:grid;gap:9px;
+  padding:17px 18px;
+  background:linear-gradient(145deg,#381b21,#21181b);
+  border:1px solid #904a50;
+  color:#f8dedf;
+  border-radius:14px;
+}
+.destructive-warning strong{font-size:16px;color:#ffe3de;}
+.destructive-warning p{font-size:13px;line-height:1.6;}
