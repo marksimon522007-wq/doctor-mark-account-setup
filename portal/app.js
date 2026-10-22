@@ -27,7 +27,7 @@ const toastRoot = document.getElementById('toast');
 const $ = id => document.getElementById(id);
 const state = {
   user: null, profile: null, student: null, settings: {}, students: [], assignments: [],
-  submissions: [], messages: [], reminders: [], roleChoice: 'student',
+  submissions: [], messages: [], reminders: [], parents: [], parentView: null, roleChoice: 'student',
   filter: 'all', studentSearch: '', busy: false, booted: false
 };
 const GOLD = '#d5b46c';
@@ -91,20 +91,21 @@ function status(a){
 const matchingSubmission = id => state.submissions.find(s=>s.assignment_id===id);
 function chip(st){const labels={pending:'To do',soon:'Due soon',overdue:'Overdue',submitted:'Sent',late:'Sent late',archived:'Archived'};const klass={submitted:'good',late:'good',soon:'warn',overdue:'bad',archived:'neutral',pending:'neutral'};return `<span class="chip ${klass[st]||'neutral'}">${labels[st]||esc(st)}</span>`;}
 function studentEmail(code) {return text(code).toLowerCase().replace(/[^a-z0-9._-]/g,'-')+'@students.drmark.local';}
+function parentEmail(code) {return text(code).toLowerCase().replace(/[^a-z0-9._-]/g,'-')+'@parents.drmark.local';}
 function generateString(length=10){const letters='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';const bytes=new Uint8Array(length);crypto.getRandomValues(bytes);return Array.from(bytes,n=>letters[n%letters.length]).join('');}
 function loadScreen(message='Opening your portal...') {root.innerHTML=`<div class="initial"><div class="spinner"></div><span>${esc(message)}</span></div>`;}
 function showLogin(message='') {
-  state.user=null;state.profile=null;state.student=null;
-  const teacher=state.roleChoice==='teacher';
+  state.user=null;state.profile=null;state.student=null;state.parentView=null;
+  const teacher=state.roleChoice==='teacher', parent=state.roleChoice==='parent';
   root.innerHTML=`<main class="login-wrap"><div class="login-brand"><img src="assets/k_chromosome.png" alt="Dr Mark logo"><div class="eyebrow">YOUR PATH TO THE WHITE COAT</div><h1>DR Mark Portal</h1><p>Small steps. Remarkable futures.</p></div>
   <section class="panel login-panel"><h2>Welcome back</h2><p class="tagline">A private learning space made just for you.</p>
-  <div class="tabs" role="tablist" aria-label="Choose your login type"><button type="button" data-action="mode" data-mode="student" class="${!teacher?'on':''}">I'm a student</button><button type="button" data-action="mode" data-mode="teacher" class="${teacher?'on':''}">I'm the teacher</button></div>
+  <div class="tabs" role="tablist" aria-label="Choose your login type"><button type="button" data-action="mode" data-mode="student" class="${!teacher&&!parent?'on':''}">Student</button><button type="button" data-action="mode" data-mode="parent" class="${parent?'on':''}">Parent</button><button type="button" data-action="mode" data-mode="teacher" class="${teacher?'on':''}">Teacher</button></div>
   ${message?`<div class="notice danger" role="alert" style="margin-bottom:16px">${esc(message)}</div>`:''}
   <form id="login-form" class="form-stack">
-  <label class="field">${teacher?'Teacher email':'Your student code'}<input name="identity" ${teacher?'type="email"':'type="text"'} autocomplete="username" placeholder="${teacher?'name@example.com':'e.g. DM-A1B2C3'}" required></label>
+  <label class="field">${teacher?'Teacher email':parent?'Parent code':'Student code'}<input name="identity" ${teacher?'type="email"':'type="text"'} autocomplete="username" placeholder="${teacher?'name@example.com':parent?'PM-XXXXXXXX':'DM-XXXXXXX'}" required></label>
   <label class="field">Password<input name="password" type="password" autocomplete="current-password" minlength="6" required></label>
   <button class="button primary full" type="submit">Sign in securely</button></form>
-  <p class="fineprint" style="margin-top:20px">Student accounts are created by Dr Mark. Public sign-up is disabled.</p></section>
+  <p class="fineprint" style="margin-top:20px">${parent?'Enter the private code and password sent to you by Dr Mark.':'Login details are provided privately by Dr Mark. Public sign-up is disabled.'}</p></section>
   <p class="fineprint" style="margin-top:22px;text-align:center">One step closer to your white coat.</p></main>`;
 }
 async function boot() {
@@ -142,7 +143,7 @@ function startPortalLiveSync() {
   stopPortalLiveSync();
   portalLiveUser=state.user.id;
   let channel=sb.channel('drmark-live-'+state.user.id+'-'+crypto.randomUUID());
-  for(const table of ['portal_assignments','portal_submissions','portal_students','portal_messages']){
+  for(const table of ['portal_assignments','portal_submissions','portal_students','portal_messages','portal_parent_links']){
     channel=channel.on('postgres_changes',{event:'*',schema:'public',table},queuePortalLiveReload);
   }
   portalLiveChannel=channel.subscribe();
@@ -153,7 +154,7 @@ async function authorize() {
   const {data:{user},error}=await sb.auth.getUser();
   if(error||!user){showLogin('Your session has expired. Please sign in.');return;}
   const p=ok(await sb.from('portal_profiles').select('id,role,full_name').eq('id',user.id).maybeSingle());
-  if(!p||!['teacher','student'].includes(p.role)){
+  if(!p||!['teacher','student','parent'].includes(p.role)){
     await sb.auth.signOut();showLogin('This account has no Portal access. Your MCQ application login is a separate service.');return;
   }
   state.user=user;state.profile=p;state.roleChoice=p.role;
@@ -161,16 +162,24 @@ async function authorize() {
   startPortalLiveSync();
 }
 async function reload(withToast=false){
+  if(state.profile?.role==='parent'){
+    await loadParentView();
+    if(withToast && state.parentView)toast('Homework status updated.');
+    return;
+  }
   const queries=[
     sb.from('portal_settings').select('brand_name,teacher_name,subjects,default_due_time,whatsapp_number').eq('id',1).maybeSingle(),
     sb.from('portal_students').select('id,name,code,subjects,auth_user_id,is_active,created_at').order('created_at',{ascending:false}),
     sb.from('portal_assignments').select('id,student_id,title,subject,topic,instructions,due_at,marks,priority,external_link,status,created_at,batch_id').order('due_at',{ascending:true}),
     sb.from('portal_submissions').select('id,assignment_id,student_id,note,submitted_at,late,status,score,max_score,feedback,reviewed_at').order('submitted_at',{ascending:false}),
     sb.from('portal_messages').select('id,student_id,body,created_at').order('created_at',{ascending:false}).limit(250),
-    sb.from('portal_deadline_reminders').select('id,assignment_id,student_id,kind,created_at').order('created_at',{ascending:false}).limit(250)
+    sb.from('portal_deadline_reminders').select('id,assignment_id,student_id,kind,created_at').order('created_at',{ascending:false}).limit(250),
+    state.profile.role==='teacher'
+      ? sb.from('portal_parent_links').select('id,student_id,code,display_name,is_active,created_at').order('created_at',{ascending:false})
+      : Promise.resolve({data:[],error:null})
   ];
   const r=await Promise.all(queries),data=r.map(ok);
-  [state.settings,state.students,state.assignments,state.submissions,state.messages,state.reminders]=[data[0]||{},data[1]||[],data[2]||[],data[3]||[],data[4]||[],data[5]||[]];
+  [state.settings,state.students,state.assignments,state.submissions,state.messages,state.reminders,state.parents]=[data[0]||{},data[1]||[],data[2]||[],data[3]||[],data[4]||[],data[5]||[],data[6]||[]];
   if(state.profile.role==='student'){
     state.student=state.students.find(s=>s.auth_user_id===state.user.id);
     if(!state.student||!state.student.is_active) {stopPortalLiveSync();root.innerHTML='<div class="initial" style="flex-direction:column;text-align:center;padding:20px">Your portal account is no longer active. Please contact Dr Mark.<button class="button" data-action="logout">Sign out</button></div>';return;}
@@ -179,22 +188,95 @@ async function reload(withToast=false){
   if(state.profile.role==='student'){announceBrowserReminders();}
   if(withToast)toast('Everything is up to date.');
 }
+
+async function portalFunction(slug,body) {
+  const {data,error}=await sb.functions.invoke(slug,{body});
+  if(error){
+    let message=error.message||'Unable to reach DR Mark Portal.';
+    try {
+      const response=error.context?.clone?.();
+      const details=response?await response.json():null;
+      if(details?.error)message=details.error;
+    }catch{}
+    throw Error(message);
+  }
+  if(!data?.ok)throw Error(data?.error||'The request was not completed.');
+  return data;
+}
+async function loadParentView() {
+  try{
+    const snapshot=await portalFunction('portal-parent-view',{action:'view'});
+    state.parentView=snapshot;
+    renderParent();
+  }catch(err){
+    state.parentView=null;
+    root.innerHTML=`<main class="parent-shell parent-unavailable">
+      <header class="parent-header"><div class="parent-brand"><img src="assets/k_chromosome.png" alt=""><strong>DR Mark Portal</strong></div></header>
+      <div class="parent-panel"><h1>Parent access unavailable</h1>
+      <p>${esc(errorText(err))}</p><p>Please contact Dr Mark if you need help.</p>
+      <div class="parent-error-buttons"><button type="button" class="button" data-action="refresh">Try again</button>
+      <button type="button" class="button ghost" data-action="logout">Sign out</button></div>
+      </div></main>`;
+  }
+}
+function renderParent(){
+  if(!state.parentView)return;
+  const data=state.parentView;
+  const tasks=Array.isArray(data.homework)?data.homework:[];
+  const completed=tasks.filter(t=>t.marked_sent).length;
+  const ordered=[...tasks].sort((a,b)=>Number(a.marked_sent)-Number(b.marked_sent)
+    || new Date(a.due_at).getTime()-new Date(b.due_at).getTime());
+  const entries=ordered.map(task=>{
+    const overdue=!task.marked_sent && new Date(task.due_at).getTime()<Date.now();
+    const done=!!task.marked_sent;
+    const label=done?'Marked as sent on WhatsApp':overdue?'Deadline passed · Not marked as sent':'Not marked as sent yet';
+    const icon=done?'&#10003;':overdue?'!':'&#9711;';
+    return `<article class="parent-task">
+      <span class="parent-task-icon ${done?'is-done':overdue?'is-overdue':'is-pending'}" aria-hidden="true">${icon}</span>
+      <div class="parent-task-text">
+        <strong>${esc(task.title)}</strong>
+        <span class="parent-task-status ${done?'is-done':overdue?'is-overdue':'is-pending'}">${esc(label)}</span>
+        <span class="parent-task-date">Due ${esc(fmt(task.due_at))}</span>
+        ${done&&task.marked_at?`<span class="parent-task-date">Marked as sent ${esc(fmt(task.marked_at))}${task.marked_late?' (after the deadline)':''}</span>`:''}
+      </div>
+    </article>`;
+  }).join('');
+  root.innerHTML=`<main class="parent-shell">
+    <header class="parent-header"><div class="parent-brand"><img src="assets/k_chromosome.png" alt=""><strong>DR Mark Portal</strong></div><button type="button" class="parent-signout" data-action="logout">Sign out</button></header>
+    <section class="parent-welcome">
+      <span class="parent-eyebrow">PARENT VIEW · READ ONLY</span>
+      <h1>Welcome!</h1>
+      <p>Here is how ${esc(dr(data.child_name||'your child'))} is doing.</p>
+    </section>
+    <section class="parent-summary" aria-label="Homework completion">
+      <span class="parent-checkmark" aria-hidden="true">&#10003;</span>
+      <div class="parent-ratio">${completed} <span>of ${tasks.length}</span></div>
+      <p>Homeworks marked as sent</p>
+    </section>
+    <div class="parent-list-title"><h2>Homework status</h2><button type="button" class="parent-refresh" data-action="refresh">Refresh</button></div>
+    <section class="parent-task-list" aria-label="Homework status">
+      ${entries||`<div class="parent-empty"><strong>No homework yet.</strong><p>When Dr Mark assigns homework, its status will appear here.</p></div>`}
+    </section>
+    <footer class="parent-footer">These statuses are based on the student's own checkmark after sending work on WhatsApp, not teacher verification.<p>This page is for viewing only.</p></footer>
+  </main>`;
+}
+
 async function signIn(form){
   const fd=new FormData(form), identity=text(fd.get('identity')),password=String(fd.get('password')||'');
   const button=form.querySelector('button[type=submit]');button.disabled=true;button.textContent='Signing in...';
   try{
-    const email=state.roleChoice==='student'?studentEmail(identity):identity;
+    const email=state.roleChoice==='student'?studentEmail(identity):state.roleChoice==='parent'?parentEmail(identity):identity;
     ok(await sb.auth.signInWithPassword({email,password}));
     await authorize();
   }catch(e){await sb.auth.signOut();showLogin(errorText(e));}
 }
-async function logout(){stopPortalLiveSync();await sb.auth.signOut();state.user=null;state.profile=null;state.student=null;state.settings={};state.students=[];state.assignments=[];state.submissions=[];state.messages=[];state.reminders=[];showLogin();toast('Signed out safely.');}
+async function logout(){stopPortalLiveSync();await sb.auth.signOut();state.user=null;state.profile=null;state.student=null;state.settings={};state.students=[];state.assignments=[];state.submissions=[];state.messages=[];state.reminders=[];state.parents=[];state.parentView=null;showLogin();toast('Signed out safely.');}
 function shell(html){
   const teacher=state.profile.role==='teacher';
   const name=teacher?(state.profile.full_name||'Teacher'):dr(state.student?.name||'Student');
   root.innerHTML=`<div class="shell"><header class="topbar"><div class="brand"><img class="logo" src="assets/k_chromosome.png" alt="Dr Mark logo"><div><strong>DR Mark Portal</strong><span>${teacher?'Teacher workspace':'YOUR PRIVATE STUDY SPACE'}</span></div></div><div class="top-actions"><span class="header-name">${esc(name)}</span><button class="button ghost slim" data-action="logout">Sign out</button></div></header>${html}<footer class="footer"><span>DR Mark Portal &middot; Made for future doctors</span><span>All deadlines use Cairo time</span></footer></div>`;
 }
-function render(){if(!state.profile){showLogin();return;}if(state.profile.role==='teacher')renderTeacher();else renderStudent();}
+function render(){if(!state.profile){showLogin();return;}if(state.profile.role==='teacher')renderTeacher();else if(state.profile.role==='parent')renderParent();else renderStudent();}
 function panelStat(n,label,extra=''){return `<div class="panel"><div class="stat-value">${n}</div><div class="stat-label">${label}</div>${extra?`<div class="tiny-muted">${extra}</div>`:''}</div>`;}
 function teacherCard(a){
   const s=matchingSubmission(a.id),st=status(a),name=state.students.find(x=>x.id===a.student_id)?.name||'Student';
@@ -206,9 +288,10 @@ function teacherCard(a){
 }
 function teacherStudentCard(s){
   const work=state.assignments.filter(a=>a.student_id===s.id && a.status!=='archived'),done=work.filter(a=>matchingSubmission(a.id)).length;
+  const parentLink=state.parents.find(p=>p.student_id===s.id);
   return `<article class="panel student-overview"><div class="space-between"><div><div class="student-name">${esc(dr(s.name))}</div><p class="small muted">${esc(s.code)}</p></div>${s.is_active?'<span class="chip good">Active</span>':'<span class="chip neutral">Inactive</span>'}</div>
     <p class="small muted" style="margin-top:14px">${done} of ${work.length} homework tasks submitted</p><div class="progress-track"><span style="width:${work.length?Math.round(done/work.length*100):0}%"></span></div>
-    <div class="button-row" style="margin-top:16px"><button class="button slim" data-action="reset-pin" data-id="${esc(s.id)}">Reset password</button><button class="button slim ghost" data-action="send-message" data-id="${esc(s.id)}">Message</button><button class="button slim ghost" data-action="toggle-student" data-id="${esc(s.id)}">${s.is_active?'Deactivate':'Reactivate'}</button><button class="button slim danger" data-action="delete-student" data-id="${esc(s.id)}">Delete student</button></div></article>`;
+    <div class="button-row" style="margin-top:16px"><button class="button slim parent-access-btn" data-action="parent-access" data-id="${esc(s.id)}">Parent access${parentLink?(parentLink.is_active?' · On':' · Off'):''}</button><button class="button slim" data-action="reset-pin" data-id="${esc(s.id)}">Reset password</button><button class="button slim ghost" data-action="send-message" data-id="${esc(s.id)}">Message</button><button class="button slim ghost" data-action="toggle-student" data-id="${esc(s.id)}">${s.is_active?'Deactivate':'Reactivate'}</button><button class="button slim danger" data-action="delete-student" data-id="${esc(s.id)}">Delete student</button></div></article>`;
 }
 function renderTeacher(){
   const active=state.students.filter(s=>s.is_active),works=state.assignments.filter(a=>a.status!=='archived'),done=works.filter(a=>matchingSubmission(a.id)).length,
@@ -281,7 +364,7 @@ function deleteStudentModal(id) {
   const s=state.students.find(x=>x.id===id);if(!s)return;
   const assigned=state.assignments.filter(a=>a.student_id===s.id).length;
   modal('Delete student permanently',`<form id="delete-student-form" data-id="${esc(s.id)}" class="form-stack">
-    <div class="destructive-warning"><strong>${esc(dr(s.name))}</strong><p>This permanently removes this student from DR Mark Portal, their ${assigned} homework assignments, checkmarks, messages, feedback and any linked Portal files. Portal access is removed. If their login is also used by the separate MCQ licensing system, that MCQ account will be kept.</p><p>This action cannot be undone.</p></div>
+    <div class="destructive-warning"><strong>${esc(dr(s.name))}</strong><p>This permanently removes this student from DR Mark Portal, their ${assigned} homework assignments, checkmarks, messages, feedback and any linked Portal files. Portal access and linked parent access are removed. If their login is also used by the separate MCQ licensing system, that MCQ account will be kept.</p><p>This action cannot be undone.</p></div>
     <label class="field">Type the student's full name to confirm: <strong>${esc(s.name)}</strong><input name="confirm_name" autocomplete="off" spellcheck="false" placeholder="Enter full name exactly" required></label>
     ${dangerFooter('Delete student permanently')}</form>`);
 }
@@ -318,6 +401,79 @@ function credentialsModal(code,pin,name){
   <div class="cred"><small>STUDENT CODE</small><code>${esc(code)}</code></div><div class="cred" style="margin-top:10px"><small>TEMPORARY PASSWORD</small><code>${esc(pin)}</code></div>
   <div class="dialog-footer"><button class="button primary" data-action="copy-credentials" data-code="${esc(code)}" data-pin="${esc(pin)}">Copy login details</button><button class="button ghost" data-action="close-modal">Done</button></div>`);
 }
+
+function parentCredentialsModal(details){
+  modal('Parent login ready',`<div class="notice good"><strong>Parent access for ${esc(dr(details.student_name))} is ready.</strong>
+    <p>Share these login details privately with the parent. The password will not be shown again after closing this window.</p></div>
+    <div class="cred"><small>PARENT CODE</small><code>${esc(details.code)}</code></div>
+    <div class="cred" style="margin-top:10px"><small>PASSWORD</small><code>${esc(details.password)}</code></div>
+    <p class="helper" style="margin-top:14px">The parent should choose <strong>Parent</strong> on the DR Mark login page.</p>
+    <div class="dialog-footer">
+      <button type="button" class="button primary" data-action="copy-parent-login" data-code="${esc(details.code)}" data-password="${esc(details.password)}" data-student="${esc(details.student_name)}">Copy login details</button>
+      <button type="button" class="button ghost" data-action="close-modal">Done</button>
+    </div>`);
+}
+function parentAccessModal(studentId){
+  const student=state.students.find(s=>s.id===studentId);
+  if(!student)return;
+  const parent=state.parents.find(p=>p.student_id===studentId);
+  const explanation='<p class="helper">Only you can give parent access. The parent can view homework status for this student only, and cannot make changes.</p>';
+  if(!parent){
+    modal('Parent access · '+dr(student.name),`${explanation}
+      <form id="parent-create-form" data-id="${esc(student.id)}" class="form-stack">
+        <label class="field">Parent name <small>Optional</small>
+          <input name="display_name" maxlength="90" placeholder="Parent" autocomplete="off"></label>
+        <p class="helper">We will generate a private login code and password for you to share on WhatsApp.</p>
+        <div class="dialog-footer"><button type="button" class="button ghost" data-action="close-modal">Cancel</button>
+        <button type="submit" class="button primary">Create parent account</button></div>
+      </form>`);
+    return;
+  }
+  modal('Parent access · '+dr(student.name),`${explanation}
+    <div class="parent-manage-status">
+      <div><strong>${esc(parent.display_name)}</strong><div class="small muted">Code: ${esc(parent.code)}</div></div>
+      <span class="chip ${parent.is_active?'good':'neutral'}">${parent.is_active?'Access on':'Access off'}</span>
+    </div>
+    <div class="parent-manage-buttons">
+      <button type="button" class="button ${parent.is_active?'ghost':'primary'}" data-action="parent-toggle" data-id="${esc(student.id)}">${parent.is_active?'Turn off parent access':'Turn on parent access'}</button>
+      <button type="button" class="button" data-action="parent-reset" data-id="${esc(student.id)}">Reset parent password</button>
+      <button type="button" class="button danger" data-action="parent-delete" data-id="${esc(student.id)}">Delete parent account</button>
+    </div>
+    <p class="fineprint">Turning access off blocks new reads immediately. You can turn it on again later. Deleting the parent account is permanent.</p>
+    <div class="dialog-footer"><button type="button" class="button ghost" data-action="close-modal">Done</button></div>`);
+}
+async function parentCreate(form){
+  await requireMatchingPortalSession('teacher');
+  const studentId=text(form.getAttribute('data-id'));
+  const display_name=text(new FormData(form).get('display_name'))||'Parent';
+  const details=await portalFunction('portal-parent-admin',{action:'create_parent',student_id:studentId,display_name});
+  await reload();parentCredentialsModal(details);
+}
+async function parentToggle(studentId){
+  await requireMatchingPortalSession('teacher');
+  const parent=state.parents.find(p=>p.student_id===studentId);
+  if(!parent)throw Error('Parent account not found. Refresh the dashboard.');
+  const currentlyOn=parent.is_active;
+  if(!window.confirm('Are you sure you want to '+(currentlyOn?'turn off':'turn on')+' parent access?'))return;
+  await portalFunction('portal-parent-admin',{action:'set_parent_active',student_id:studentId,is_active:!currentlyOn});
+  await reload();parentAccessModal(studentId);
+  toast(currentlyOn?'Parent access switched off.':'Parent access switched on.');
+}
+async function parentReset(studentId){
+  await requireMatchingPortalSession('teacher');
+  if(!window.confirm('Generate a new parent password? The previous password will stop working for future logins.'))return;
+  const details=await portalFunction('portal-parent-admin',{action:'reset_parent',student_id:studentId});
+  parentCredentialsModal(details);
+}
+async function parentDelete(studentId){
+  await requireMatchingPortalSession('teacher');
+  const student=state.students.find(s=>s.id===studentId);
+  if(!window.confirm('Permanently delete the parent account for '+(student?.name||'this student')+'? The parent will lose all portal access.'))return;
+  await portalFunction('portal-parent-admin',{action:'delete_parent',student_id:studentId});
+  closeModal();await reload();
+  toast('Parent account removed from the portal.');
+}
+
 function settingsModal(){
   modal('Portal settings',`<form id="settings-form" class="form-stack">
   <label class="field">Your WhatsApp number <small>Optional, international format, e.g. 201234567890</small><input name="whatsapp" inputmode="tel" value="${esc(state.settings.whatsapp_number||'')}" placeholder="Country code + phone"></label>
@@ -502,6 +658,10 @@ document.addEventListener('click',async e=>{
     else if(action==='refresh')await reload(true);
     else if(action==='new-student')studentModal();
     else if(action==='new-homework')homeworkModal();
+    else if(action==='parent-access')parentAccessModal(id);
+    else if(action==='parent-toggle')await parentToggle(id);
+    else if(action==='parent-reset')await parentReset(id);
+    else if(action==='parent-delete')await parentDelete(id);
     else if(action==='edit-work')homeworkModal(state.assignments.find(a=>a.id===id));
     else if(action==='archive-work')await archiveWork(id);
     else if(action==='delete-work')deleteHomeworkModal(id);
@@ -513,6 +673,16 @@ document.addEventListener('click',async e=>{
     else if(action==='send-message')messageModal(id);
     else if(action==='toggle-student')await updateStudentStatus(id);
     else if(action==='enable-alerts')await enableAlerts();
+    else if(action==='copy-parent-login'){
+      const message=`DR Mark Portal · Parent Access
+Student: Dr. ${el.getAttribute('data-student')}
+Parent code: ${el.getAttribute('data-code')}
+Password: ${el.getAttribute('data-password')}
+Website: ${location.origin+location.pathname}
+Choose "Parent" to sign in.`;
+      await navigator.clipboard.writeText(message);
+      toast('Parent login details copied. Send them privately on WhatsApp.');
+    }
     else if(action==='copy-credentials'){
       const s=`DR Mark Portal\nStudent code: ${el.getAttribute('data-code')}\nPassword: ${el.getAttribute('data-pin')}\nWebsite: ${location.origin+location.pathname}`;
       await navigator.clipboard.writeText(s);toast('Student login details copied.');
@@ -534,13 +704,14 @@ document.addEventListener('input',e=>{
 });
 document.addEventListener('submit',async e=>{
   const form=e.target;
-  if(!['login-form','student-form','homework-form','feedback-form','settings-form','message-form','reset-form','delete-homework-form','delete-student-form'].includes(form.id))return;
+  if(!['login-form','student-form','homework-form','feedback-form','settings-form','message-form','reset-form','delete-homework-form','delete-student-form','parent-create-form'].includes(form.id))return;
   e.preventDefault();if(state.busy)return;
   state.busy=true;const button=form.querySelector('button[type=submit]');const original=button?.textContent;
   if(button){button.disabled=true;button.textContent='Saving...';}
   try{
     if(form.id==='login-form')await signIn(form);
     else if(form.id==='student-form')await newStudent(form);
+    else if(form.id==='parent-create-form')await parentCreate(form);
     else if(form.id==='homework-form')await createOrEditHomework(form);
     else if(form.id==='feedback-form')await saveFeedback(form);
     else if(form.id==='settings-form')await saveSettings(form);
@@ -563,4 +734,5 @@ setInterval(()=>{
 window.addEventListener('focus',queuePortalLiveReload);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')queuePortalLiveReload();});
 setInterval(()=>{if(state.profile&&!state.busy&&document.visibilityState==='visible'&&modalRoot.hidden)queuePortalLiveReload();},90_000);
+setInterval(()=>{if(state.profile?.role==='parent'&&!state.busy&&document.visibilityState==='visible')queuePortalLiveReload();},45_000);
 boot();
