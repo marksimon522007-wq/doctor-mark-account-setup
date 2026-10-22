@@ -10,6 +10,7 @@
   const image = 'assets/k_chromosome.png';
   const easing = 'cubic-bezier(.16,1,.3,1)';
   let scheduled = false;
+  let activeRun = null;
 
   function stageHTML(scene) {
     return `<div class="cm-stage" data-cm-scene="${scene}" role="button" tabindex="0"
@@ -63,45 +64,77 @@
     requestAnimationFrame(step);
   }
 
-  function landing(stage) {
-    for (const delay of [0,140]) {
-      const ring = document.createElement('span');
-      ring.className = 'cm-arrival-ring';
-      stage.append(ring);
-      ring.animate([
-        {opacity:.66,transform:'translate(-50%,-50%) scale(.48)'},
-        {opacity:0,transform:'translate(-50%,-50%) scale(1.48)'}
-      ],{duration:640,delay,easing:'ease-out',fill:'forwards'}).finished
-        .then(()=>ring.remove()).catch(()=>ring.remove());
-    }
+  // The curtain guarantees a text-free centre-screen entrance. Every
+  // animation ends exactly at the underlying unanimated style.
+  function stopRun(run, completed=false) {
+    if (!run || run.stopped) return;
+    run.stopped=true;
+    if (activeRun === run) activeRun=null;
+    run.animations.forEach(a=>{ try { a.cancel(); } catch (_) {} });
+    run.curtain.remove();
+    document.querySelectorAll('.cm-dust').forEach(el=>el.remove());
+    run.stage.classList.remove('cm-arriving');
+    run.stage.removeAttribute('aria-busy');
+    if (completed && run.stage.isConnected) run.idle.classList.add('cm-settled');
   }
 
   function play(stage) {
-    const fly = stage.querySelector('.cm-fly');
-    const idle = stage.querySelector('.cm-idle');
-    if (!fly || !idle) return;
-    const old = fly.getAnimations()[0];
-    if (old) old.cancel();
-    idle.classList.remove('cm-floating');
-    if (reduced.matches || !stage.isConnected) { idle.classList.add('cm-floating'); return; }
-    const r = fly.getBoundingClientRect();
-    if (r.width < 10 || r.height < 10) { idle.classList.add('cm-floating'); return; }
-    const duration = window.innerWidth < 700 ? 2600 : 3800;
-    const scale = Math.min(window.innerHeight*1.02/r.height, 4.7);
-    const dx = window.innerWidth/2-(r.left+r.width/2);
-    const dy = window.innerHeight/2-(r.top+r.height/2);
-    const big = `translate3d(${dx}px,${dy}px,0) scale(${scale}) rotateY(-18deg)`;
-    const anim = fly.animate([
-      {opacity:0,transform:big,offset:0},
-      {opacity:1,transform:big,offset:.12},
-      {opacity:1,transform:big,offset:.20,easing:'cubic-bezier(.45,0,.12,1)'},
-      {opacity:1,transform:'translate3d(0,0,0) scale(1) rotateY(0)',offset:1}
+    if (!stage.isConnected || !stage.closest('.hero')) return;
+    if (activeRun) stopRun(activeRun);
+    const fly=stage.querySelector('.cm-fly'),idle=stage.querySelector('.cm-idle');
+    const copy=stage.closest('.hero').querySelector('.hero-copy');
+    if (!fly || !idle || !copy) return;
+    idle.classList.remove('cm-floating','cm-settled');
+    stage.classList.add('cm-arriving');
+    stage.setAttribute('aria-busy','true');
+    stage.querySelector('.cm-parallax').style.transform='';
+    if (reduced.matches) {
+      stage.classList.remove('cm-arriving');
+      stage.removeAttribute('aria-busy');
+      idle.classList.add('cm-settled');
+      return;
+    }
+
+    const curtain=document.createElement('div');
+    curtain.className='cm-curtain';
+    curtain.setAttribute('aria-hidden','true');
+    document.body.append(curtain);
+    const r=fly.getBoundingClientRect();
+    if (r.width<10 || r.height<10) {
+      curtain.remove(); stage.classList.remove('cm-arriving');
+      stage.removeAttribute('aria-busy'); idle.classList.add('cm-settled'); return;
+    }
+
+    const duration=innerWidth<700?2950:3750;
+    const scale=Math.min(innerHeight*.95/r.height,innerWidth*.72/r.width,4.25);
+    const dx=innerWidth/2-(r.left+r.width/2),dy=innerHeight/2-(r.top+r.height/2);
+    const centered='translate3d('+dx+'px,'+dy+'px,0) scale('+scale+')';
+    // No rebound, impact rings, magnet snap, or hand-off position jump.
+    const move=fly.animate([
+      {offset:0,opacity:0,transform:centered},
+      {offset:.09,opacity:1,transform:centered},
+      {offset:.24,opacity:1,transform:centered,easing:'cubic-bezier(.45,0,.55,1)'},
+      {offset:1,opacity:1,transform:'none'}
     ],{duration,easing:'linear',fill:'both'});
+    const reveal=curtain.animate([
+      {offset:0,opacity:1},{offset:.28,opacity:1},
+      {offset:.43,opacity:.85},{offset:.68,opacity:.26},
+      {offset:.94,opacity:0},{offset:1,opacity:0}
+    ],{duration,easing:'linear',fill:'both'});
+    const words=copy.animate([
+      {offset:0,opacity:0,transform:'translate3d(-18px,0,0)'},
+      {offset:.30,opacity:0,transform:'translate3d(-18px,0,0)'},
+      {offset:.80,opacity:1,transform:'none'},
+      {offset:1,opacity:1,transform:'none'}
+    ],{duration,easing:'linear',fill:'both'});
+    const ornaments=[...stage.querySelectorAll('.cm-orbit,.cm-pedestal')].map(node=>node.animate([
+      {offset:0,opacity:0},{offset:.53,opacity:0},
+      {offset:.92,opacity:1},{offset:1,opacity:1}
+    ],{duration,easing:'linear',fill:'both'}));
+    const run={stage,idle,curtain,animations:[move,reveal,words,...ornaments],stopped:false};
+    activeRun=run;
     sparkleTrail(fly,duration);
-    anim.finished.then(()=>{
-      anim.cancel();
-      if (stage.isConnected) { idle.classList.add('cm-floating'); landing(stage); }
-    }).catch(()=>{});
+    move.finished.then(()=>stopRun(run,true)).catch(()=>{});
   }
 
   function install(img, scene) {
@@ -117,22 +150,24 @@
     });
     const parallax = stage.querySelector('.cm-parallax');
     stage.addEventListener('pointermove', event=>{
-      if(reduced.matches || window.innerWidth<900 || event.pointerType !== 'mouse')return;
+      if(reduced.matches || stage.classList.contains('cm-arriving') || window.innerWidth<900 || event.pointerType !== 'mouse')return;
       const rect=stage.getBoundingClientRect();
       const x=(event.clientX-(rect.left+rect.width/2))/rect.width;
       const y=(event.clientY-(rect.top+rect.height/2))/rect.height;
       parallax.style.transform = `rotateY(${x*14}deg) rotateX(${-y*10}deg)`;
     });
     stage.addEventListener('pointerleave',()=>{parallax.style.transform='';});
-    if (scene === 'login' || reduced.matches || seen.has(scene)) {
-      stage.querySelector('.cm-idle').classList.add('cm-floating');
+    const heroScene = scene === 'teacher' || scene === 'student';
+    if (!heroScene || reduced.matches || seen.has(scene)) {
+      stage.querySelector('.cm-idle').classList.add(heroScene ? 'cm-settled' : 'cm-floating');
     } else {
       seen.add(scene);
-      requestAnimationFrame(()=>setTimeout(()=>{if(stage.isConnected)play(stage);},130));
+      play(stage);
     }
   }
 
   function enhance() {
+    if (activeRun && !activeRun.stage.isConnected) stopRun(activeRun);
     const login = app.querySelector('.login-brand > img');
     if(login) install(login,'login');
     app.querySelectorAll('.teacher-hero > img.hero-mark, .student-hero > img.hero-mark')
@@ -141,7 +176,7 @@
   function queue() {
     if(scheduled)return;
     scheduled=true;
-    requestAnimationFrame(()=>{scheduled=false;enhance();});
+    queueMicrotask(()=>{scheduled=false;enhance();});
   }
   new MutationObserver(queue).observe(app,{childList:true,subtree:true});
   enhance();

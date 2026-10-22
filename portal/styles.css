@@ -87,3 +87,15 @@ body { background:radial-gradient(820px 550px at 83% -8%,#36281975,transparent 7
 @media(max-width:850px){.hero .cm-stage{flex-basis:192px;width:192px;height:260px;margin:-7px -15px}.hero .cm-fly{width:147px;height:237px}.hero .cm-orbit{width:185px;height:185px}.hero .cm-arrival-ring{width:180px;height:180px}}
 @media(max-width:520px){.hero{flex-direction:column;align-items:stretch}.hero .cm-stage{align-self:center;flex-basis:auto;width:220px;height:210px;margin:-12px auto -22px}.hero .cm-fly{width:126px;height:203px}.hero .cm-orbit{width:180px;height:180px}.hero .cm-pedestal{height:45px;bottom:2px}.hero.teacher-hero,.hero.student-hero{min-height:unset}.login-brand .cm-stage{width:148px;height:180px}.login-brand .cm-fly{width:104px;height:166px}.login-brand .cm-orbit{width:145px;height:145px}.login-brand .cm-pedestal{bottom:2px}}
 @media(prefers-reduced-motion:reduce){.cm-floating,.cm-orbit{animation:none!important}.cm-parallax{transition:none!important}}
+
+
+/* Signature chromosome v6: centered entrance stays text-free until movement. */
+.cm-stage.cm-arriving { position:relative; z-index:2002; }
+.cm-curtain { position:fixed; inset:0; z-index:2000;
+  background:radial-gradient(ellipse 65vw 70vh at 50% 45%,#171511 0%,#0b0d10 85%);
+  opacity:1; pointer-events:auto; will-change:opacity; }
+.cm-dust { z-index:2003; }
+.cm-stage.cm-arriving .cm-parallax { transition:none; }
+/* Remain physically anchored at rest; only the decorative orbit keeps moving. */
+.cm-settled { transform:none!important; animation:none!important; }
+@media(prefers-reduced-motion:reduce) { .cm-floating {animation:none!important;} }
