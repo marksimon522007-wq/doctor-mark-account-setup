@@ -164,7 +164,7 @@ async function reload(withToast=false){
   const queries=[
     sb.from('portal_settings').select('brand_name,teacher_name,subjects,default_due_time,whatsapp_number').eq('id',1).maybeSingle(),
     sb.from('portal_students').select('id,name,code,subjects,auth_user_id,is_active,created_at').order('created_at',{ascending:false}),
-    sb.from('portal_assignments').select('id,student_id,title,subject,topic,instructions,due_at,marks,priority,external_link,status,created_at').order('due_at',{ascending:true}),
+    sb.from('portal_assignments').select('id,student_id,title,subject,topic,instructions,due_at,marks,priority,external_link,status,created_at,batch_id').order('due_at',{ascending:true}),
     sb.from('portal_submissions').select('id,assignment_id,student_id,note,submitted_at,late,status,score,max_score,feedback,reviewed_at').order('submitted_at',{ascending:false}),
     sb.from('portal_messages').select('id,student_id,body,created_at').order('created_at',{ascending:false}).limit(250),
     sb.from('portal_deadline_reminders').select('id,assignment_id,student_id,kind,created_at').order('created_at',{ascending:false}).limit(250)
@@ -270,8 +270,10 @@ function deleteHomeworkModal(id) {
   const a=state.assignments.find(x=>x.id===id);if(!a)return;
   const student=state.students.find(s=>s.id===a.student_id);
   const hasSubmission=!!matchingSubmission(a.id);
+  const batch=a.batch_id?state.assignments.filter(w=>w.batch_id===a.batch_id):[a];
   modal('Delete homework permanently',`<form id="delete-homework-form" data-id="${esc(a.id)}" class="form-stack">
-    <div class="destructive-warning"><strong>${esc(a.title)}</strong><p>Assigned to ${esc(student?.name||'this student')}. This will permanently erase the homework, ${hasSubmission?'its submitted checkmark and feedback, ':''}its deadline reminders and related portal records. It cannot be undone.</p></div>
+    <div class="destructive-warning"><strong>${esc(a.title)}</strong><p>Assigned to ${esc(student?.name||'this student')}. This permanently erases ${hasSubmission?'the sent checkmark and feedback, ':''}deadline reminders and related portal records. It cannot be undone.</p></div>
+    ${batch.length>1?`<label class="checkline"><input name="delete_all" type="checkbox"> Delete this same homework for all ${batch.length} assigned students (instead of only ${esc(student?.name||'this student')})</label>`:''}
     <label class="checkline"><input name="understood" type="checkbox" required> I understand this cannot be undone.</label>
     ${dangerFooter('Delete homework permanently')}</form>`);
 }
@@ -377,7 +379,8 @@ async function createOrEditHomework(form){
     if(!ids.length)throw Error('Choose at least one student.');
     const activeIds=new Set(state.students.filter(x=>x.is_active).map(s=>s.id));
     if(ids.some(x=>!activeIds.has(x)))throw Error('One of the selected students is no longer active.');
-    const rows=ids.map(student_id=>({...base,student_id,status:'open',priority:'Normal',marks:10}));
+    const batch_id=crypto.randomUUID();
+    const rows=ids.map(student_id=>({...base,student_id,batch_id,status:'open',priority:'Normal',marks:10}));
     ok(await sb.from('portal_assignments').insert(rows));
   }
   closeModal();await reload();toast(id?'Homework updated.':'Homework assigned. One step closer!');
@@ -427,10 +430,12 @@ async function deleteHomeworkPermanently(form) {
   if (!form.querySelector('input[name="understood"]')?.checked) throw Error('Please acknowledge that this deletion is permanent.');
   const a=state.assignments.find(x=>x.id===id);
   if(!a)throw Error('Homework not found. Refresh the dashboard.');
-  const {data,error}=await sb.from('portal_assignments').delete().eq('id',id).select('id');
+  const deleteAll=!!a.batch_id&&!!form.querySelector('input[name="delete_all"]')?.checked;
+  const {data,error}=await sb.from('portal_assignments').delete()
+    .eq(deleteAll?'batch_id':'id',deleteAll?a.batch_id:id).select('id');
   if(error)throw error;
   if(!data?.length)throw Error('Homework was not deleted. Refresh the dashboard and check your login.');
-  closeModal();await reload();toast('Homework permanently deleted.');
+  closeModal();await reload();toast(deleteAll?'Homework permanently removed for all assigned students.':'Homework permanently deleted.');
 }
 async function deleteStudentPermanently(form) {
   await requireMatchingPortalSession('teacher');
