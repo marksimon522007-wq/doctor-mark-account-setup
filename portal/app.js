@@ -1,128 +1,437 @@
-/* Dr Mark Student Portal — Supabase-backed production build */
-const BACKEND=window.DR_MARK_BACKEND;
-const sb=window.supabase.createClient(BACKEND.supabaseUrl,BACKEND.supabaseKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
-const BUCKET=BACKEND.storageBucket;
-const CONFIG={brandName:"Dr Mark",portalSubtitle:"Student Portal",teacher:"Dr Mark",welcome:"Every student. One private path.",subjects:["AS Biology","A2 Biology","OL Biology"],prefix:"DM",gold:"#B98A35",dueTime:"17:00",publicBaseUrl:""};
-const TOPICS=["Cell structure","Biological molecules","Enzymes","Cell membranes and transport","Cell division","Nucleic acids","Photosynthesis","Respiration","Genetics","Ecology","Homeostasis","Immunity","Other"];
-const PAPER_TYPES=["Paper 1","Paper 2","Paper 3","Paper 4","Paper 5","Other"];
-const CHECKER_STATUS={received:"Received",queued:"Queued",triggered:"Sent to Checker",checking:"Checking",preparing_report:"Preparing Report",completed:"Completed",manual_review:"Manual Review",failed:"Failed"};
-let DB={cfg:{...CONFIG},students:[],checkerEvents:[]},ROLE=null,SESSION=null,AUTHMODE="student",R={v:"overview",id:null,tab:"Overview"},F={q:"",sub:"",sort:"name",hs:"",hsub:"",hst:"",cs:""},syncTimer=null,introDone=false;
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1/+esm';
 
-const C=()=>DB.cfg,uid=()=>crypto.randomUUID(),esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const fmt=d=>d?new Date(d).toLocaleString([],{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"—";
-const fmtDate=d=>d?new Date(d).toLocaleDateString([],{day:"numeric",month:"short",year:"numeric"}):"—";
-const fileSafe=s=>String(s||"file").replace(/[^a-zA-Z0-9._-]+/g,"_").slice(-120);
-const studentEmail=code=>`${String(code).trim().toLowerCase().replace(/[^a-z0-9._-]/g,"-")}@${BACKEND.studentEmailDomain}`;
-const st=w=>w.status==="completed"?"Completed":w.sub?(w.sub.late?"Submitted Late":"Submitted"):new Date(w.due)<new Date()?"Overdue":new Date(w.due)-Date.now()<1728e5?"Due Soon":"Upcoming";
-const badge=s=>`<span class="bd ${String(s).replace(/ /g,"-").toLowerCase()}">${esc(s)}</span>`;
-const stu=id=>DB.students.find(s=>s.id===id),all=()=>DB.students.flatMap(s=>s.hw.map(w=>({w,s})));
-const pct=s=>s.hw.length?Math.round(100*s.hw.filter(w=>w.status==="completed").length/s.hw.length):0;
-const cnt=(s,x)=>s.hw.filter(w=>st(w)===x).length,actv=s=>s.hw.filter(w=>st(w)!=="Completed").length;
-const kp=p=>`<span class="kp"><img class="d" src="assets/k_chromosome.png" alt=""><img src="assets/k_chromosome.png" alt="" style="clip-path:inset(${100-p}% 0 0 0)"></span>`;
-const grp=w=>{if(st(w)==="Overdue")return"Overdue";const n=new Date(),k=Math.floor((new Date(w.due)-new Date(n.getFullYear(),n.getMonth(),n.getDate()))/864e5);return k<=0?"Today":k===1?"Tomorrow":k<7?"This Week":"Later"};
-const inp=(n,l,v="",t="text",x="")=>`<label>${l}<input name="${n}" type="${t}" value="${esc(v)}" ${x}></label>`;
-const ta=(n,l,v="")=>`<label>${l}<textarea name="${n}" rows="3">${esc(v)}</textarea></label>`;
-const sel=(n,l,o,v="")=>`<label>${l}<select name="${n}">${o.map(x=>`<option ${x==v?"selected":""}>${esc(x)}</option>`).join("")}</select></label>`;
-const empty=t=>`<p class="mu" style="padding:18px 0">${esc(t)}</p>`;
-const fl=a=>(a||[]).map(f=>`<button class="filebtn" data-a="download" data-path="${esc(f.path)}" data-name="${esc(f.n)}">${esc(f.n)}</button>`).join(" ");
-const q=async(table,method="select",payload=null,match=null,select="*")=>{let r=sb.from(table);if(method==="select")r=r.select(select);else if(method==="insert")r=r.insert(payload).select(select);else if(method==="update")r=r.update(payload).select(select);else if(method==="delete")r=r.delete();if(match)Object.entries(match).forEach(([k,v])=>r=r.eq(k,v));const {data,error}=await r;if(error)throw error;return data};
-const one=a=>Array.isArray(a)?a[0]:a;
-
-function authFields(){const f=$("#loginFields"),n=$("#authNote");if(AUTHMODE==="student"){f.innerHTML=inp("code","Student code","","text","required autocomplete=username")+inp("pin","PIN / password","","password","required autocomplete=current-password");n.textContent="Use the student code and PIN given by Dr Mark."}else{f.innerHTML=inp("email","Teacher email","","email","required autocomplete=username")+inp("password","Password","","password","required autocomplete=current-password");n.textContent="Teacher access uses your secure Doctor Mark account."}}
-async function signIn(fd){const o=Object.fromEntries(fd);const email=AUTHMODE==="student"?studentEmail(o.code):o.email.trim();const password=AUTHMODE==="student"?o.pin:o.password;const {data,error}=await sb.auth.signInWithPassword({email,password});if(error)throw new Error("Invalid login details");SESSION=data.session;await enterApp()}
-async function signOut(){clearInterval(syncTimer);syncTimer=null;await sb.auth.signOut();SESSION=null;ROLE=null;DB={cfg:{...CONFIG},students:[],checkerEvents:[]};$("#app").hidden=true;$("#portal").hidden=true;$("#portal").innerHTML="";$("#auth").hidden=false;authFields()}
-
-async function getRole(){const {data:{user}}=await sb.auth.getUser();if(!user)return null;const {data,error}=await sb.from("portal_profiles").select("role,full_name").eq("id",user.id).maybeSingle();if(error)throw error;return data?.role||null}
-function cfgFromRow(x){if(!x)return{...CONFIG};return{brandName:x.brand_name,portalSubtitle:x.portal_subtitle,teacher:x.teacher_name,welcome:x.welcome_message,subjects:x.subjects||CONFIG.subjects,prefix:x.code_prefix,gold:x.accent_gold,dueTime:String(x.default_due_time||CONFIG.dueTime).slice(0,5),publicBaseUrl:x.public_base_url||""}}
-async function loadState(silent=false){if(!SESSION)return;const tables=["portal_settings","portal_students","portal_assignments","portal_assignment_files","portal_submissions","portal_submission_files","portal_messages","portal_resources","portal_resource_files","portal_teacher_notes","portal_checker_jobs","portal_checker_events"];
- const res=await Promise.all(tables.map(t=>sb.from(t).select("*")));
- const err=res.find(x=>x.error);if(err?.error)throw err.error;const [settings,students,assignments,afiles,subs,sfiles,msgs,resrc,rfiles,notes,jobs,events]=res.map(x=>x.data||[]);
- DB.cfg=cfgFromRow(settings[0]);DB.checkerEvents=events;
- const sm=new Map(students.map(r=>[r.id,{id:r.id,authUserId:r.auth_user_id,name:r.name,code:r.code,subjects:r.subjects||[],phone:r.phone||"",pphone:r.parent_phone||"",start:r.start_date||"",exam:r.exam_date||"",active:r.is_active,hw:[],msgs:[],res:[],tn:[],checker:[]} ]));
- for(const a of assignments){const s=sm.get(a.student_id);if(!s)continue;const ss=subs.filter(x=>x.assignment_id===a.id).sort((x,y)=>new Date(x.submitted_at)-new Date(y.submitted_at));const latest=ss.at(-1)||null;s.hw.push({id:a.id,title:a.title,subject:a.subject||"",topic:a.topic||"",instr:a.instructions||"",due:a.due_at,marks:Number(a.marks),prio:a.priority,link:a.external_link||"",tnote:a.teacher_note||"",status:a.status,files:afiles.filter(f=>f.assignment_id===a.id).map(f=>({n:f.file_name,path:f.storage_path})),subs:ss.map(x=>({id:x.id,attempt:x.attempt_no,at:x.submitted_at,late:x.late,note:x.note||"",status:x.status,score:x.score==null?null:Number(x.score),max:x.max_score==null?null:Number(x.max_score),fb:x.feedback||"",files:sfiles.filter(f=>f.submission_id===x.id&&f.kind==="submission").map(f=>({n:f.file_name,path:f.storage_path})),cfiles:sfiles.filter(f=>f.submission_id===x.id&&f.kind==="corrected").map(f=>({n:f.file_name,path:f.storage_path}))})),sub:latest?{id:latest.id,attempt:latest.attempt_no,at:latest.submitted_at,late:latest.late,note:latest.note||"",status:latest.status,files:sfiles.filter(f=>f.submission_id===latest.id&&f.kind==="submission").map(f=>({n:f.file_name,path:f.storage_path}))}:null,score:latest?.score==null?null:Number(latest.score),max:latest?.max_score==null?null:Number(latest.max_score),fb:latest?.feedback||"",cfiles:latest?sfiles.filter(f=>f.submission_id===latest.id&&f.kind==="corrected").map(f=>({n:f.file_name,path:f.storage_path})):[]})}
- for(const m of msgs){const s=sm.get(m.student_id);if(s)s.msgs.push({id:m.id,at:m.created_at,text:m.body})}
- for(const r of resrc){const s=sm.get(r.student_id);if(s)s.res.push({id:r.id,at:r.created_at,title:r.title,subject:r.subject||"",text:r.description||"",link:r.external_link||"",files:rfiles.filter(f=>f.resource_id===r.id).map(f=>({n:f.file_name,path:f.storage_path}))})}
- for(const n of notes){const s=sm.get(n.student_id);if(s)s.tn.push({id:n.id,at:n.created_at,text:n.body})}
- for(const j of jobs){const s=sm.get(j.student_id);if(s)s.checker.push({id:j.id,subject:j.subject,paper:j.paper_type,hint:j.paper_hint||"",status:j.status,src:{n:j.source_file_name,path:j.source_storage_path},result:j.result_storage_path?{n:j.result_file_name||"Checked Paper.pdf",path:j.result_storage_path}:null,mark:j.mark_awarded==null?null:Number(j.mark_awarded),total:j.mark_total==null?null:Number(j.mark_total),studentMessage:j.student_message||"",internalNote:j.internal_note||"",dispatchError:j.last_dispatch_error||"",dispatchAttempts:Number(j.dispatch_attempts||0),created:j.created_at,triggered:j.triggered_at,started:j.started_at,completed:j.completed_at,updated:j.updated_at})}
- DB.students=[...sm.values()].sort((a,b)=>a.name.localeCompare(b.name));applyCfg();if(!silent){if(ROLE==="teacher")render();else renderStudentPortal()}}
-
-async function enterApp(){ROLE=await getRole();if(!ROLE){await sb.auth.signOut();throw new Error("This account is not enabled for the Student Portal")};await loadState(true);$("#auth").hidden=true;if(ROLE==="teacher"){$("#portal").hidden=true;$("#app").hidden=false;R={v:"overview",id:null,tab:"Overview"};render();if(!introDone){introDone=true;setTimeout(()=>intro(),50)}}else{$("#app").hidden=true;renderStudentPortal()};syncTimer=setInterval(async()=>{try{await loadState(true);if(ROLE==="student")renderStudentPortal();else if(R.v==="checker")render()}catch{}},15000)}
-
-function modal(title,html,cb,label="Save",busy="Saving..."){const m=$("#modal");m.innerHTML=`<div class="mc"><h3>${esc(title)}</h3><form>${html}<div class="acts"><button type="button" class="btn" data-a="close">Cancel</button><button class="btn gold">${esc(label)}</button></div></form></div>`;openM(m);$("form",m).onsubmit=async e=>{e.preventDefault();const f=e.target,b=$(".gold",f);b.disabled=true;b.innerHTML=`<span class="sp"></span>${esc(busy)}`;try{await cb(Object.fromEntries(new FormData(f)),new FormData(f));await loadState(true);closeM(m);toast(label==="Create Student"?"Student created":label+" done");if(label==="Create Student")divide();if(ROLE==="teacher")refresh();else renderStudentPortal()}catch(x){console.error(x);toast(x.message||"Something went wrong",1);b.disabled=false;b.textContent=label}};$("input,textarea",m)?.focus()}
-async function uploadFiles(studentId,folder,files){const out=[];for(const f of [...files].filter(x=>x&&x.name)){if(f.size>50*1024*1024)throw new Error(`${f.name} is larger than 50 MB`);const path=`${studentId}/${folder}/${Date.now()}_${uid().slice(0,8)}_${fileSafe(f.name)}`;const {error}=await sb.storage.from(BUCKET).upload(path,f,{upsert:false,contentType:f.type||undefined});if(error)throw error;out.push({n:f.name,path})}return out}
-async function downloadPath(path,name){const {data,error}=await sb.storage.from(BUCKET).download(path);if(error)throw error;const a=document.createElement("a");a.href=URL.createObjectURL(data);a.download=name||path.split("/").pop();a.click();setTimeout(()=>URL.revokeObjectURL(a.href),10000)}
-
-const row=({w,s})=>`<div class="row" data-a="open" data-id="${s.id}"><b>${esc(s.name)}</b><span>${esc(w.title)}</span><span class="mu">${esc(w.subject)}</span><span>${fmt(w.due)}</span>${badge(st(w))}</div>`;
-const scard=s=>`<div class="card" data-a="open" data-id="${s.id}"><div style="float:right">${kp(pct(s))}</div><b style="font:600 18px Georgia,serif">${esc(s.name)}</b><div class="mu">${esc(s.code)} | ${esc(s.subjects.join(", ")||"No subject")}${!s.active?" | Archived":""}</div><div class="bar"><i style="width:${pct(s)}%"></i></div><div class="mu">${actv(s)} active | ${cnt(s,"Overdue")} overdue | ${pct(s)}% complete</div></div>`;
-const checkCard=(j,s,teacher=false)=>`<div class="card check-card"><div class="two"><div><b>${esc(j.paper)} — ${esc(j.subject)}</b> ${badge(CHECKER_STATUS[j.status]||j.status)}<div class="mu">#${esc(j.id.slice(0,8).toUpperCase())} | submitted ${fmt(j.created)}</div>${j.hint?`<p>${esc(j.hint)}</p>`:""}<div>${fl([j.src])}</div>${j.result?`<p><b>Checked report:</b> ${fl([j.result])}</p>`:""}${j.mark!=null?`<p class="checker-mark">${j.mark}${j.total!=null?` / ${j.total}`:""}</p>`:""}${j.studentMessage?`<p>${esc(j.studentMessage)}</p>`:""}${teacher&&j.dispatchError?`<p class="dispatch-error"><b>Trigger:</b> ${esc(j.dispatchError)}${j.dispatchAttempts?` (attempt ${j.dispatchAttempts})`:""}</p>`:""}</div>${teacher?`<div class="acts checker-actions">${["received","queued"].includes(j.status)?`<button class="btn sm" data-a="retryDispatch" data-id="${j.id}">Send to Checker</button>`:""}<button class="btn sm" data-a="workerLink" data-id="${j.id}">Worker Link</button><button class="btn sm" data-a="checkStatus" data-id="${j.id}" data-s="checking">Set Checking</button><button class="btn sm" data-a="checkStatus" data-id="${j.id}" data-s="manual_review">Manual Review</button><button class="btn sm gold" data-a="completeCheck" data-id="${j.id}" data-student="${s.id}">Upload Result</button></div>`:""}</div><div class="status-strip">${["received","queued","triggered","checking","preparing_report","completed"].map(x=>`<span class="${j.status===x?"now":(["completed"].includes(j.status)&&x!=="completed"?"done":"")}">${CHECKER_STATUS[x]}</span>`).join("")}</div></div>`;
-
-const V={
-overview(){const S=DB.students.filter(s=>s.active),A=all(),live=A.filter(x=>st(x.w)!=="Completed"),wk=live.filter(x=>{const d=new Date(x.w.due)-Date.now();return d>0&&d<6048e5}),od=live.filter(x=>st(x.w)==="Overdue"),cq=DB.students.flatMap(s=>s.checker.map(j=>({j,s}))).filter(x=>!["completed","failed"].includes(x.j.status)),up=live.filter(x=>!x.w.sub).sort((a,b)=>new Date(a.w.due)-new Date(b.w.due)).slice(0,5);return `<div class="hero"><div><p class="eye" data-r>${esc(C().portalSubtitle)}</p><h1 data-r>${esc(C().brandName)}<br>${esc(C().welcome)}</h1><p class="lead" data-r>Each student has a private profile with homework, files, feedback and paper checking.</p><div class="acts" data-r><button class="btn gold" data-a="newStudent">Create Student</button><button class="btn" data-a="nav" data-v="checker">Open Checker Queue</button></div></div><div class="stage"><div class="pedestal"></div><div class="orbit"></div><div class="kfly" id="kfly"><div class="kidle"><div class="kpar"><img src="assets/k_chromosome.png" alt="K chromosome"></div></div></div></div></div><div class="stats">${[["Students",S.length,"students"],["Active homework",live.length,"homework"],["Due this week",wk.length,"deadlines"],["Overdue",od.length,"deadlines"],["Checker queue",cq.length,"checker"]].map(x=>`<div class="card" data-r data-a="nav" data-v="${x[2]}"><b>${x[1]}</b><span>${x[0]}</span></div>`).join("")}</div><div data-r><h2>Recently added students</h2>${S.length?`<div class="grid">${S.slice(-4).reverse().map(scard).join("")}</div>`:empty("No students yet.")}<h2>Upcoming deadlines</h2>${up.length?`<div class="card">${up.map(row).join("")}</div>`:empty("Nothing due.")}</div>`},
-students(){const g=()=>{let l=DB.students.filter(s=>(s.name+s.code).toLowerCase().includes(F.q.toLowerCase())&&(!F.sub||s.subjects.includes(F.sub)));l.sort((a,b)=>F.sort==="name"?a.name.localeCompare(b.name):F.sort==="overdue"?cnt(b,"Overdue")-cnt(a,"Overdue"):actv(b)-actv(a));return l.length?l.map(scard).join(""):empty("No students match.")};V._g=g;return `<div class="tools"><input id="q" placeholder="Search name or code" value="${esc(F.q)}"><select id="fs"><option value="">All subjects</option>${C().subjects.map(s=>`<option ${F.sub==s?"selected":""}>${esc(s)}</option>`).join("")}</select><select id="so"><option value="name">Sort: name</option><option value="overdue" ${F.sort==="overdue"?"selected":""}>Sort: overdue</option><option value="active" ${F.sort==="active"?"selected":""}>Sort: active work</option></select><button class="btn gold" data-a="newStudent">Create Student</button></div><div class="grid" id="grid">${g()}</div>`},
-homework(){const g=()=>{const l=all().filter(({w,s})=>(!F.hs||s.id===F.hs)&&(!F.hsub||w.subject===F.hsub)&&(!F.hst||st(w)===F.hst)&&(s.name+w.title).toLowerCase().includes(F.q.toLowerCase())).sort((a,b)=>new Date(a.w.due)-new Date(b.w.due));return l.length?l.map(row).join(""):empty("No homework found.")};V._g=g;return `<div class="tools"><input id="q" placeholder="Search" value="${esc(F.q)}"><select id="hs"><option value="">All students</option>${DB.students.map(s=>`<option value="${s.id}" ${F.hs==s.id?"selected":""}>${esc(s.name)}</option>`).join("")}</select><select id="hsub"><option value="">All subjects</option>${C().subjects.map(s=>`<option ${F.hsub==s?"selected":""}>${esc(s)}</option>`).join("")}</select><select id="hst"><option value="">All statuses</option>${["Upcoming","Due Soon","Overdue","Submitted","Submitted Late","Completed"].map(s=>`<option ${F.hst==s?"selected":""}>${s}</option>`).join("")}</select></div><div class="card" style="margin-top:20px" id="grid">${g()}</div>`},
-deadlines(){const A=all().filter(x=>x.w.status!=="completed").sort((a,b)=>new Date(a.w.due)-new Date(b.w.due));return ["Overdue","Today","Tomorrow","This Week","Later"].map(g=>{const l=A.filter(x=>grp(x.w)===g);return l.length?`<h2>${g}</h2><div class="card">${l.map(row).join("")}</div>`:""}).join("")||empty("No open deadlines.")},
-calendar(){const n=new Date(),y=n.getFullYear(),m=n.getMonth(),f=new Date(y,m,1).getDay(),D=new Date(y,m+1,0).getDate(),Al=all();return `<h2 style="margin-top:0">${n.toLocaleString([],{month:"long",year:"numeric"})}</h2><div class="cal">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=>`<div style="border:0;min-height:0">${d}</div>`).join("")}${Array(f).fill("<div style='border:0'></div>").join("")}${Array.from({length:D},(_,i)=>{const l=Al.filter(x=>{const d=new Date(x.w.due);return d.getFullYear()===y&&d.getMonth()===m&&d.getDate()===i+1});return `<div class="${l.length?"h":""}"${l.length?` data-a="open" data-id="${l[0].s.id}"`:""}>${i+1}${l.map(x=>`<br>${esc(x.s.name.split(" ")[0])}`).join("")}</div>`}).join("")}</div>`},
-checker(){let rows=DB.students.flatMap(s=>s.checker.map(j=>({j,s}))).sort((a,b)=>new Date(b.j.created)-new Date(a.j.created));if(F.cs)rows=rows.filter(x=>x.j.status===F.cs);return `<div class="checker-head"><div><p class="eye">PAPER CHECKER</p><h2 style="margin:0">Checking Queue</h2><p class="mu">Every upload has a traceable status. Nothing can silently disappear.</p></div><select id="cs"><option value="">All statuses</option>${Object.entries(CHECKER_STATUS).map(([k,v])=>`<option value="${k}" ${F.cs===k?"selected":""}>${v}</option>`).join("")}</select></div>${rows.length?rows.map(({j,s})=>`<div class="student-label">${esc(s.name)} <span>${esc(s.code)}</span></div>${checkCard(j,s,true)}`).join(""):empty("No checker submissions yet.")}`},
-settings(){const c=C();return `<form id="sf" class="card" style="max-width:680px;margin-top:20px">${inp("brandName","Brand name",c.brandName)}${inp("portalSubtitle","Portal subtitle",c.portalSubtitle)}${inp("teacher","Teacher name",c.teacher)}${inp("welcome","Welcome message",c.welcome)}<div class="two">${inp("gold","Accent gold",c.gold,"color")}${inp("dueTime","Default deadline time",c.dueTime,"time")}</div>${inp("prefix","Student code prefix",c.prefix)}${inp("subjects","Subjects (comma separated)",c.subjects.join(", "))}${inp("publicBaseUrl","Public portal URL",c.publicBaseUrl,"url",'placeholder="https://your-domain.com"')}<p class="mu">Used only to generate secure one-paper worker links for the automatic checker.</p><div class="acts"><button class="btn gold">Save Settings</button><button type="button" class="btn" data-a="export">Export Backup</button></div></form>`},
-student(id){const s=stu(id);if(!s)return empty("Student not found.");return `<div class="card"><div class="two"><div><div style="float:left;margin-right:14px">${kp(pct(s))}</div><h3 style="margin:0">${esc(s.name)}</h3><div class="mu">${esc(s.code)} | ${esc(s.subjects.join(", "))} | ${badge(s.active?"Active":"Archived")}${s.exam?` | ${Math.max(0,Math.ceil((new Date(s.exam)-Date.now())/864e5))} days to exam`:""}</div></div><div class="acts" style="justify-content:flex-end"><button class="btn sm" data-a="editStudent" data-id="${s.id}">Edit</button><button class="btn sm" data-a="resetPin" data-id="${s.id}">Reset PIN</button><button class="btn sm" data-a="toggleStudent" data-id="${s.id}">${s.active?"Archive":"Reactivate"}</button><button class="btn sm" data-a="wa" data-id="${s.id}" data-p="phone">WhatsApp Student</button><button class="btn sm" data-a="wa" data-id="${s.id}" data-p="pphone">WhatsApp Parent</button><button class="btn sm" data-a="report" data-id="${s.id}">Report Card</button><button class="btn gold" data-a="addHW" data-id="${s.id}">Add Homework</button></div></div><div class="bar"><i style="width:${pct(s)}%"></i></div><span class="mu">${pct(s)}% complete</span></div><div class="tabs">${TABS.map(t=>`<button data-a="tab" data-t="${t}" class="${t===R.tab?"on":""}">${t}</button>`).join("")}<i id="ind"></i></div><div id="tc">${T[R.tab](s)}</div>`}}
-;
-const TABS=["Overview","Homework","Submissions","Paper Checker","Resources","Messages","Progress","Teacher Notes"];
-const hwCard=(s,w)=>`<div class="card" style="margin-bottom:12px"><div class="two"><div><b>${esc(w.title)}</b> ${badge(st(w))}<div class="mu">${esc(w.subject)} | due ${fmt(w.due)} | ${w.marks} marks${w.prio&&w.prio!=="Normal"?" | "+esc(w.prio)+" priority":""}</div><p style="margin:8px 0">${esc(w.instr)}</p><div>${fl(w.files)} ${w.link?`<a class="lnk" href="${esc(w.link)}" target="_blank" rel="noopener">Link</a>`:""}</div></div><div class="acts" style="justify-content:flex-end;align-content:flex-start">${[["editHW","Edit"],["dupHW","Duplicate"],["extHW","Extend +1 day"],["doneHW","Mark completed"],["delHW","Delete"]].map(([a,l])=>`<button class="btn sm ${a==="delHW"?"red":""}" data-a="${a}" data-id="${s.id}" data-w="${w.id}">${l}</button>`).join("")}</div></div></div>`;
-const lst=(s,k,ph,note)=>`<div class="tools"><button class="btn gold" data-a="addItem" data-k="${k}" data-id="${s.id}">Add ${ph}</button></div>${note?`<p class="mu" style="margin-top:8px">${esc(note)}</p>`:""}${(s[k].length?s[k].map(i=>`<div class="card" style="margin-top:12px"><b>${esc(i.title||fmt(i.at))}</b> <span class="mu">${esc(i.subject||"")} ${i.at&&i.title?fmt(i.at):""}</span><p>${esc(i.text)}</p>${fl(i.files)} ${i.link?`<a class="lnk" href="${esc(i.link)}" target="_blank" rel="noopener">Open link</a>`:""}<div><button class="btn sm red" data-a="delItem" data-k="${k}" data-id="${s.id}" data-i="${i.id}">Delete</button></div></div>`).reverse().join(""):empty("Nothing here yet."))}`;
-const T={
- Overview:s=>`<div class="stats">${[["Total homework",s.hw.length],["Completed",s.hw.filter(w=>w.status==="completed").length],["Overdue",cnt(s,"Overdue")],["Awaiting review",s.hw.filter(w=>w.sub&&w.sub.status==="submitted").length],["Checker papers",s.checker.length]].map(x=>`<div class="card"><b>${x[1]}</b><span>${x[0]}</span></div>`).join("")}</div><h2>Next deadlines</h2>${s.hw.filter(w=>st(w)!=="Completed").sort((a,b)=>new Date(a.due)-new Date(b.due)).slice(0,4).map(w=>hwCard(s,w)).join("")||empty("No open homework.")}`,
- Homework:s=>s.hw.length?[...s.hw].sort((a,b)=>new Date(a.due)-new Date(b.due)).map(w=>hwCard(s,w)).join(""):empty("No homework for this student yet."),
- Submissions:s=>s.hw.flatMap(w=>w.subs.map(sub=>({w,sub}))).sort((a,b)=>new Date(b.sub.at)-new Date(a.sub.at)).map(({w,sub})=>`<div class="card" style="margin-bottom:12px"><b>${esc(w.title)} — Attempt ${sub.attempt}</b> ${badge(sub.status==="returned"?"Returned":sub.late?"Submitted Late":"Submitted")}<div class="mu">Submitted ${fmt(sub.at)}</div><p>${fl(sub.files)} ${esc(sub.note||"")}</p>${sub.score!=null?`<p>Mark: <b>${sub.score}/${sub.max}</b>. ${esc(sub.fb||"")} ${fl(sub.cfiles)}</p>`:""}<button class="btn sm" data-a="review" data-id="${s.id}" data-w="${w.id}" data-sub="${sub.id}">${sub.score!=null?"Edit review":"Review"}</button></div>`).join("")||empty("No submissions yet."),
- "Paper Checker":s=>s.checker.length?[...s.checker].sort((a,b)=>new Date(b.created)-new Date(a.created)).map(j=>checkCard(j,s,true)).join(""):empty("This student has not submitted a paper to the checker yet."),
- Resources:s=>lst(s,"res","Resource"),Messages:s=>lst(s,"msgs","Message"),"Teacher Notes":s=>lst(s,"tn","Note","Private: students never see these notes."),
- Progress:s=>{const sc=s.hw.filter(w=>w.score!=null),avg=sc.length?Math.round(sc.reduce((a,w)=>a+100*w.score/w.max,0)/sc.length):"-",sub=s.hw.length?Math.round(100*s.hw.filter(w=>w.sub||w.status==="completed").length/s.hw.length):0;return `<div class="stats">${[["Total",s.hw.length],["Completed",s.hw.filter(w=>w.status==="completed").length],["Overdue",cnt(s,"Overdue")],["Submission rate",sub+"%"],["Average score",avg==="-"?avg:avg+"%"]].map(x=>`<div class="card"><b>${x[1]}</b><span>${x[0]}</span></div>`).join("")}</div><h2>Recent marks</h2>${sc.slice(-5).reverse().map(w=>`<div class="row"><b>${esc(w.title)}</b><span>${w.score}/${w.max}</span></div>`).join("")||empty("No marks yet.")}`}
+const CFG = window.DR_MARK_CONFIG;
+const sb = createClient(CFG.supabaseUrl, CFG.publishableKey, {
+  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+});
+const root = document.getElementById('app');
+const modalRoot = document.getElementById('modal');
+const toastRoot = document.getElementById('toast');
+const $ = id => document.getElementById(id);
+const state = {
+  user: null, profile: null, student: null, settings: {}, students: [], assignments: [],
+  submissions: [], messages: [], reminders: [], roleChoice: 'student',
+  filter: 'all', studentSearch: '', busy: false, booted: false
 };
-
-const NAV=[["overview","Overview"],["students","Students"],["homework","Homework"],["deadlines","Deadlines"],["calendar","Calendar"],["checker","Paper Checker"],["settings","Settings"]];
-function render(){if(ROLE!=="teacher")return;$("#view").innerHTML=V[R.v](R.id);const s=R.v==="student"?stu(R.id):null;$("#crumb").textContent=s?"Students / "+s.name:(NAV.find(n=>n[0]===R.v)?.[1]||"");$("#topActs").innerHTML=`<button class="btn gold" data-a="newStudent">Create Student</button><button class="btn" data-a="signout">Sign out</button>`;$("#nav").innerHTML=NAV.map(n=>`<button data-a="nav" data-v="${n[0]}" class="${n[0]===R.v||(R.v==="student"&&n[0]==="students")?"on":""}">${n[1]}</button>`).join("");if(R.v==="overview")hero();else stagger($("#view"));ind()}
-function ind(){const b=$(".tabs .on"),i=$("#ind");if(b&&i){i.style.width=b.offsetWidth+"px";i.style.transform=`translateX(${b.offsetLeft}px)`}}
-const refresh=()=>{const y=scrollY;render();scrollTo(0,y)};
-async function go(v,id,tab){const el=$("#view");if(!reduced&&el?.children.length)await el.animate([{opacity:1,transform:"none",filter:"blur(0)"},{opacity:0,transform:"scale(.985)",filter:"blur(6px)"}],{duration:180,fill:"forwards"}).finished;R={v,id,tab:tab||"Overview"};render();el?.getAnimations().forEach(a=>a.cancel());scrollTo(0,0);if(!reduced)el?.animate([{opacity:0,transform:"scale(1.01)",filter:"blur(6px)"},{opacity:1,transform:"none",filter:"blur(0)"}],{duration:380,easing:EASE})}
-function applyCfg(){document.documentElement.style.setProperty("--gold",C().gold);if($("#bn"))$("#bn").textContent=C().brandName;if($("#bs"))$("#bs").textContent=C().portalSubtitle;document.title=C().brandName+" "+C().portalSubtitle}
-
-async function invokeStudentAdmin(body){const {data,error}=await sb.functions.invoke("portal-student-admin",{body});if(error)throw error;if(data?.error)throw new Error(data.error);return data}
-async function createStudent(o,fd){const subs=fd.getAll("sub"),ab=(subs[0]||"XX").split(" ")[0].toUpperCase();let code=o.code.trim();if(!code)code=`${C().prefix}-${ab}-${1000+Math.floor(Math.random()*9000)}`;await invokeStudentAdmin({action:"create",name:o.name,code,pin:o.pin,subjects:subs,phone:o.phone||null,parent_phone:o.pphone||null,start_date:o.start||null,exam_date:o.exam||null,notes:o.notes||null})}
-async function assignmentModal(s,w={}){const two=x=>`<div class="two">${x}</div>`;modal(w.id?"Edit Homework":"Add Homework",inp("title","Homework title",w.title,"text","required")+sel("subject","Subject",s.subjects.length?s.subjects:C().subjects,w.subject)+ta("instr","Instructions",w.instr)+two(inp("date","Due date",w.due?.slice(0,10),"date","required")+inp("time","Due time",w.due?new Date(w.due).toTimeString().slice(0,5):C().dueTime,"time"))+two(inp("marks","Marks",w.marks||10,"number","min=0 step=any")+sel("prio","Priority",["Normal","High","Low"],w.prio))+inp("files","Attachments (multiple allowed)","","file","multiple")+inp("link","External link",w.link)+ta("tnote","Note shown with homework",w.tnote)+inp("topic","Syllabus topic",w.topic,"text",'list="tp"')+`<datalist id="tp">${TOPICS.map(t=>`<option>${t}</option>`).join("")}</datalist>`+(w.id||DB.students.length<2?"":`<p class="mu">Also give a private copy to:</p><div class="chk">${DB.students.filter(x=>x.id!==s.id&&x.active).map(x=>`<label><input type="checkbox" name="also" value="${x.id}"> ${esc(x.name)}</label>`).join("")}</div>`),async(o,fd)=>{const due=new Date(`${o.date}T${o.time||C().dueTime}`).toISOString(),base={title:o.title,subject:o.subject,topic:o.topic||null,instructions:o.instr||"",due_at:due,marks:+o.marks||0,priority:o.prio,external_link:o.link||null,teacher_note:o.tnote||null,updated_at:new Date().toISOString()};if(w.id){await q("portal_assignments","update",base,{id:w.id});const fs=await uploadFiles(s.id,`assignments/${w.id}`,[...fd.getAll("files")]);for(const f of fs)await q("portal_assignment_files","insert",{assignment_id:w.id,student_id:s.id,file_name:f.n,storage_path:f.path})}else{const targets=[s.id,...fd.getAll("also")];for(const sid of targets){const a=one(await q("portal_assignments","insert",{...base,student_id:sid,status:"open"}));const fs=await uploadFiles(sid,`assignments/${a.id}`,[...fd.getAll("files")]);for(const f of fs)await q("portal_assignment_files","insert",{assignment_id:a.id,student_id:sid,file_name:f.n,storage_path:f.path})}}},"Save Homework","Saving Homework...")}
-
-const A={
- nav:d=>go(d.v),open:d=>go("student",d.id),close:()=>closeM($("#modal")),signout:()=>signOut(),
- tab:d=>{R.tab=d.t;$$(`.tabs button`).forEach(b=>b.classList.toggle("on",b.dataset.t===d.t));ind();const c=$("#tc");c.innerHTML=T[d.t](stu(R.id));stagger(c)},
- newStudent(){modal("Create Student",inp("name","Student full name","","text","required")+`<div class="chk">${C().subjects.map(s=>`<label><input type="checkbox" name="sub" value="${esc(s)}"> ${esc(s)}</label>`).join("")}</div>`+inp("code","Student code (leave empty to generate)")+inp("pin","PIN / password","","password","required minlength=6")+inp("phone","Phone (optional)")+inp("pphone","Parent phone (optional)")+inp("start","Starting date (optional)","","date")+inp("exam","Exam date (optional)","","date")+ta("notes","Private teacher note (optional)"),createStudent,"Create Student","Creating Student...")},
- editStudent(d){const s=stu(d.id);modal("Edit Student",inp("name","Student full name",s.name,"text","required")+`<div class="chk">${C().subjects.map(x=>`<label><input type="checkbox" name="sub" value="${esc(x)}" ${s.subjects.includes(x)?"checked":""}> ${esc(x)}</label>`).join("")}</div>`+inp("phone","Phone",s.phone)+inp("pphone","Parent phone",s.pphone)+inp("start","Starting date",s.start,"date")+inp("exam","Exam date",s.exam,"date"),async(o,fd)=>{await q("portal_students","update",{name:o.name,subjects:fd.getAll("sub"),phone:o.phone||null,parent_phone:o.pphone||null,start_date:o.start||null,exam_date:o.exam||null,updated_at:new Date().toISOString()},{id:s.id})},"Save Student")},
- resetPin(d){const s=stu(d.id);modal("Reset Student PIN",`<p class="mu">${esc(s.name)} — ${esc(s.code)}</p>`+inp("pin","New PIN / password","","password","required minlength=6"),async o=>{await invokeStudentAdmin({action:"reset_pin",student_id:s.id,pin:o.pin})},"Reset PIN","Resetting...")},
- async toggleStudent(d){const s=stu(d.id);if(!confirm(`${s.active?"Archive":"Reactivate"} ${s.name}?`))return;await q("portal_students","update",{is_active:!s.active,updated_at:new Date().toISOString()},{id:s.id});await loadState();toast(s.active?"Student archived":"Student reactivated")},
- addHW:d=>assignmentModal(stu(d.id)),editHW:d=>assignmentModal(stu(d.id),stu(d.id).hw.find(w=>w.id===d.w)),
- async dupHW(d){const s=stu(d.id),w=s.hw.find(x=>x.id===d.w);await q("portal_assignments","insert",{student_id:s.id,title:w.title+" (copy)",subject:w.subject,topic:w.topic||null,instructions:w.instr,due_at:w.due,marks:w.marks,priority:w.prio,external_link:w.link||null,teacher_note:w.tnote||null,status:"open"});await loadState();toast("Homework duplicated")},
- async extHW(d){const w=stu(d.id).hw.find(x=>x.id===d.w);await q("portal_assignments","update",{due_at:new Date(new Date(w.due).getTime()+864e5).toISOString(),updated_at:new Date().toISOString()},{id:w.id});await loadState();toast("Deadline extended")},
- async doneHW(d){await q("portal_assignments","update",{status:"completed",updated_at:new Date().toISOString()},{id:d.w});await loadState();toast("Marked completed")},
- async delHW(d){if(!confirm("Delete this homework and all its submission history?"))return;await q("portal_assignments","delete",null,{id:d.w});await loadState();toast("Homework deleted")},
- review(d){const s=stu(d.id),w=s.hw.find(x=>x.id===d.w),sub=w.subs.find(x=>x.id===d.sub)||w.subs.at(-1);modal("Review Submission",`<p class="mu">${esc(w.title)} — Attempt ${sub.attempt}</p><div class="two">${inp("score","Mark",sub.score??"","number","required min=0 step=any")}${inp("max","Maximum mark",sub.max??w.marks,"number","required min=0 step=any")}</div>`+ta("fb","Feedback",sub.fb)+inp("cf","Corrected file (optional)","","file")+sel("act","Outcome",["Mark completed","Return for correction","Save only"],sub.status==="returned"?"Return for correction":"Save only"),async(o,fd)=>{const status=o.act==="Return for correction"?"returned":"reviewed";await q("portal_submissions","update",{score:+o.score,max_score:+o.max,feedback:o.fb||null,status,reviewed_at:new Date().toISOString()},{id:sub.id});if(o.act==="Mark completed")await q("portal_assignments","update",{status:"completed",updated_at:new Date().toISOString()},{id:w.id});if(o.act==="Return for correction")await q("portal_assignments","update",{status:"open",updated_at:new Date().toISOString()},{id:w.id});const f=fd.get("cf");if(f?.name){const fs=await uploadFiles(s.id,`submissions/${w.id}/${sub.id}/corrected`,[f]);for(const x of fs)await q("portal_submission_files","insert",{submission_id:sub.id,student_id:s.id,kind:"corrected",file_name:x.n,storage_path:x.path})}},"Save Feedback","Saving Feedback...")},
- addItem(d){const k=d.k,s=stu(d.id),lab={res:"Resource",msgs:"Message",tn:"Note"}[k];modal("Add "+lab,(k==="res"?inp("title","Title","","text","required")+sel("subject","Subject",s.subjects.length?s.subjects:C().subjects)+inp("files","Files","","file","multiple")+inp("link","External link"):"")+ta("text",k==="res"?"Description":lab+" text"),async(o,fd)=>{if(k==="msgs")await q("portal_messages","insert",{student_id:s.id,body:o.text});else if(k==="tn")await q("portal_teacher_notes","insert",{student_id:s.id,body:o.text});else{const r=one(await q("portal_resources","insert",{student_id:s.id,title:o.title,description:o.text||"",subject:o.subject||null,external_link:o.link||null}));const fs=await uploadFiles(s.id,`resources/${r.id}`,[...fd.getAll("files")]);for(const x of fs)await q("portal_resource_files","insert",{resource_id:r.id,student_id:s.id,file_name:x.n,storage_path:x.path})}},"Add "+lab,"Saving...")},
- async delItem(d){const table={msgs:"portal_messages",tn:"portal_teacher_notes",res:"portal_resources"}[d.k];await q(table,"delete",null,{id:d.i});await loadState()},
- async download(d){try{await downloadPath(d.path,d.name)}catch(e){toast("Could not download file",1)}},
- export(){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(DB,null,2)],{type:"application/json"}));a.download="dr-mark-portal-backup-"+new Date().toISOString().slice(0,10)+".json";a.click();toast("Backup exported")},
- async retryDispatch(d){try{const {data,error}=await sb.functions.invoke("portal-checker-dispatch",{body:{job_id:d.id}});if(error)throw error;if(data?.error)throw new Error(data.error);await loadState();toast("Paper sent to checker") }catch(e){await loadState(true);refresh();toast(e.message||"Paper saved, but trigger delivery failed",1)}},
- async workerLink(d){try{let base=(C().publicBaseUrl||"").trim().replace(/\/$/,"");if(!base&&/^https?:$/.test(location.protocol))base=new URL(".",location.href).href.replace(/\/$/,"");if(!base)throw new Error("Set the Public portal URL in Settings first");const {data,error}=await sb.functions.invoke("portal-checker-worker",{body:{action:"create_link",job_id:d.id,base_url:base}});if(error)throw error;if(data?.error)throw new Error(data.error);await navigator.clipboard.writeText(data.worker_url);toast("Secure worker link copied") }catch(e){toast(e.message||"Could not create worker link",1)}},
- async checkStatus(d){const patch={status:d.s,updated_at:new Date().toISOString()};if(d.s==="checking")patch.started_at=new Date().toISOString();await q("portal_checker_jobs","update",patch,{id:d.id});await loadState();toast("Checker status updated")},
- completeCheck(d){const s=stu(d.student),j=s.checker.find(x=>x.id===d.id);modal("Complete Paper Check",`<p class="mu">#${esc(j.id.slice(0,8).toUpperCase())} — ${esc(s.name)}</p>`+inp("file","Checked PDF report","","file","required accept=.pdf,application/pdf")+`<div class="two">${inp("mark","Mark awarded",j.mark??"","number","step=any min=0")}${inp("total","Total mark",j.total??"","number","step=any min=0")}</div>`+ta("message","Message to student",j.studentMessage),async(o,fd)=>{const f=fd.get("file"),fs=await uploadFiles(s.id,`checker/${j.id}/result`,[f]),x=fs[0];await q("portal_checker_jobs","update",{status:"completed",result_file_name:x.n,result_storage_path:x.path,mark_awarded:o.mark===""?null:+o.mark,mark_total:o.total===""?null:+o.total,student_message:o.message||null,completed_at:new Date().toISOString(),updated_at:new Date().toISOString()},{id:j.id})},"Complete Check","Uploading Result...")},
- wa:d=>{const s=stu(d.id),n=(s[d.p]||"").replace(/\D/g,"").replace(/^0/,"20");if(!n)return toast("No phone number saved",1);const w=s.hw.filter(x=>st(x)!=="Completed").sort((a,b)=>new Date(a.due)-new Date(b.due))[0];open("https://wa.me/"+n+"?text="+encodeURIComponent(`${C().brandName}: Hello ${s.name}`+(w?`, reminder: \"${w.title}\" is due ${fmt(w.due)}.`:", nothing is due right now.")))},
- report:d=>{const s=stu(d.id),w=open("","_blank");w.document.write(`<title>${esc(s.name)}</title><body style="font-family:Georgia,serif;padding:40px;color:#111"><h1>${esc(C().brandName)} - Progress Report</h1><h2>${esc(s.name)} (${esc(s.code)})</h2><p>Completed ${s.hw.filter(x=>x.status==="completed").length} of ${s.hw.length}. Overdue: ${cnt(s,"Overdue")}.</p><table border="1" cellpadding="6" style="border-collapse:collapse"><tr><th>Homework<th>Topic<th>Status<th>Mark</tr>${s.hw.map(x=>`<tr><td>${esc(x.title)}<td>${esc(x.topic||"")}<td>${st(x)}<td>${x.score!=null?x.score+"/"+x.max:"-"}`).join("")}</table><p>${esc(C().teacher)}</p><script>onload=()=>print()<\/script>`);w.document.close()}
-};
-
-document.addEventListener("click",e=>{const am=e.target.closest("[data-auth-mode]");if(am){AUTHMODE=am.dataset.authMode;$$(`[data-auth-mode]`).forEach(b=>b.classList.toggle("on",b===am));authFields();return}const t=e.target.closest("[data-a]");if(t&&A[t.dataset.a])A[t.dataset.a](t.dataset)});
-document.addEventListener("input",e=>{const i=e.target.id;if(!["q","fs","so","hs","hsub","hst","cs"].includes(i))return;const m={q:"q",fs:"sub",so:"sort",hs:"hs",hsub:"hsub",hst:"hst",cs:"cs"};F[m[i]]=e.target.value;if(i==="cs")return render();$("#grid").innerHTML=V._g();stagger($("#grid"))});
-document.addEventListener("submit",async e=>{if(e.target.id==="loginForm"){e.preventDefault();const b=$(".auth-submit");b.disabled=true;b.innerHTML='<span class="sp"></span>Signing in...';try{await signIn(new FormData(e.target))}catch(x){toast(x.message||"Sign in failed",1)}finally{b.disabled=false;b.textContent="Enter Portal"}return}if(e.target.id!=="sf")return;e.preventDefault();const o=Object.fromEntries(new FormData(e.target));const subjects=o.subjects.split(",").map(x=>x.trim()).filter(Boolean);try{await q("portal_settings","update",{brand_name:o.brandName,portal_subtitle:o.portalSubtitle,teacher_name:o.teacher,welcome_message:o.welcome,subjects,code_prefix:o.prefix,accent_gold:o.gold,default_due_time:o.dueTime,public_base_url:o.publicBaseUrl||null,updated_at:new Date().toISOString()},{id:1});await loadState();toast("Settings saved")}catch(x){toast(x.message,1)}});
-addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("#modal").hidden)closeM($("#modal"))});
-
-function renderStudentPortal(){const s=DB.students[0],p=$("#portal");if(!s){p.hidden=false;p.innerHTML=`<div class="pw"><h1>Student Portal</h1>${empty("This account is not linked to an active student profile.")}<button class="btn" data-a="signout">Sign out</button></div>`;return}const by=x=>s.hw.filter(w=>st(w)===x),card=w=>{const latest=w.sub;return `<div class="card" style="margin:12px 0"><b>${esc(w.title)}</b> ${badge(st(w))}<div class="mu">${esc(w.subject)} | due ${fmt(w.due)} | ${w.marks} marks</div><p style="margin:8px 0">${esc(w.instr)}</p>${w.tnote?`<p class="mu">Teacher note: ${esc(w.tnote)}</p>`:""}<div>${fl(w.files)} ${w.link?`<a class="lnk" href="${esc(w.link)}" target="_blank" rel="noopener">Link</a>`:""}</div>${latest?`<p><b>${latest.late?"SUBMITTED LATE":"SUBMITTED"}</b> ${fmt(latest.at)} — Attempt ${latest.attempt}</p>`:w.status!=="completed"?`<button class="btn gold sm" data-a="submitHW" data-id="${s.id}" data-w="${w.id}">Submit</button>`:""}${w.score!=null?`<p>Score: <b><span class="cu" data-v="${w.score}">${w.score}</span>/${w.max}</b> ${esc(w.fb||"")} ${fl(w.cfiles)}</p>`:w.fb?`<p>Feedback: ${esc(w.fb)}</p>`:""}${latest?.status==="returned"?`<p class="return-note">Returned for correction. Submit a new attempt without losing the old one.</p><button class="btn gold sm" data-a="submitHW" data-id="${s.id}" data-w="${w.id}">Submit corrected attempt</button>`:""}</div>`};
- p.innerHTML=`<div class="pw"><div class="student-top"><div><p class="eye">DR MARK STUDENT PORTAL</p><h1 style="margin:0">Welcome, ${esc(s.name)}</h1><p class="mu">${esc(s.code)} | ${esc(C().teacher)}</p></div><button class="btn" data-a="signout">Sign out</button></div><div class="checker-hero"><div><p class="eye">PAPER CHECKER</p><h2>Submit a paper for checking</h2><p class="mu">Upload your answered paper once. You can follow its status here until the checked PDF is ready.</p></div><button class="btn gold" data-a="submitChecker" data-id="${s.id}">Upload Paper</button></div>${s.checker.length?`<h2>My Checked Papers</h2>${[...s.checker].sort((a,b)=>new Date(b.created)-new Date(a.created)).map(j=>checkCard(j,s,false)).join("")}`:""}${by("Overdue").length?`<h2>Overdue</h2>${by("Overdue").map(card).join("")}`:""}<h2>Due soon</h2>${s.hw.filter(w=>["Due Soon","Upcoming"].includes(st(w))).map(card).join("")||empty("Nothing due soon.")}<h2>Submitted / Returned</h2>${s.hw.filter(w=>w.sub&&w.status!=="completed").map(card).join("")||empty("No current submissions.")}<h2>Completed</h2>${by("Completed").map(card).join("")||empty("No completed homework yet.")}<h2>Messages</h2>${s.msgs.map(m=>`<div class="card" style="margin:10px 0"><span class="mu">${fmt(m.at)}</span><p>${esc(m.text)}</p></div>`).reverse().join("")||empty("No messages.")}<h2>Resources</h2>${s.res.map(r=>`<div class="card" style="margin:10px 0"><b>${esc(r.title)}</b> <span class="mu">${esc(r.subject)}</span><p>${esc(r.text)}</p>${fl(r.files)} ${r.link?`<a class="lnk" href="${esc(r.link)}" target="_blank" rel="noopener">Open</a>`:""}</div>`).join("")||empty("No resources.")}</div>`;p.hidden=false;countUp()}
-A.submitHW=d=>{const s=stu(d.id),w=s.hw.find(x=>x.id===d.w),next=(w.subs.at(-1)?.attempt||0)+1;modal("Submit Work",`<p class="mu">${esc(w.title)} — Attempt ${next}</p>`+inp("files","Upload PDF, image, document or ZIP","","file","multiple required")+ta("note","Note to teacher (optional)"),async(o,fd)=>{const sub=one(await q("portal_submissions","insert",{assignment_id:w.id,student_id:s.id,attempt_no:next,note:o.note||null,late:new Date()>new Date(w.due),status:"submitted"}));const fs=await uploadFiles(s.id,`submissions/${w.id}/${sub.id}/submission`,[...fd.getAll("files")]);for(const x of fs)await q("portal_submission_files","insert",{submission_id:sub.id,student_id:s.id,kind:"submission",file_name:x.n,storage_path:x.path})},"Submit Work","Submitting...")};
-A.submitChecker=d=>{const s=stu(d.id);modal("Submit Paper for Checking",sel("subject","Subject",s.subjects.length?s.subjects:C().subjects)+sel("paper","Paper",PAPER_TYPES)+inp("hint","Paper code / session / chapter (optional)")+inp("file","Answered paper (PDF)","","file","required accept=.pdf,application/pdf")+`<p class="mu">Maximum file size: 50 MB. Keep all answered pages in one PDF where possible.</p>`,async(o,fd)=>{const f=fd.get("file");if(f.type&&f.type!=="application/pdf"&&!f.name.toLowerCase().endsWith(".pdf"))throw new Error("Please upload a PDF");const id=uid(),fs=await uploadFiles(s.id,`checker/${id}/source`,[f]),x=fs[0];await q("portal_checker_jobs","insert",{id,student_id:s.id,subject:o.subject,paper_type:o.paper,paper_hint:o.hint||null,status:"received",source_file_name:x.n,source_storage_path:x.path,updated_at:new Date().toISOString()});try{await sb.functions.invoke("portal-checker-dispatch",{body:{job_id:id}})}catch{}},"Submit Paper","Uploading Paper...")};
-
-async function boot(){authFields();const {data:{session}}=await sb.auth.getSession();SESSION=session;if(session){try{await enterApp()}catch(e){toast(e.message||"Could not open portal",1);await signOut()}}else{$("#auth").hidden=false;document.body.classList.remove("pre")}}
+const GOLD = '#d5b46c';
+const esc = x => String(x ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const text = x => String(x ?? '').trim();
+function toast(message, bad=false) {
+  clearTimeout(toast.timer);
+  toastRoot.textContent = message;
+  toastRoot.className = 'toast' + (bad ? ' error' : '');
+  toastRoot.hidden = false;
+  toast.timer = setTimeout(() => toastRoot.hidden = true, 5500);
+}
+function errorText(e) {
+  const s = e?.message || String(e || 'Please try again.');
+  if (/duplicate key/i.test(s)) return 'This work was already marked as sent. Refreshing your dashboard may help.';
+  return s.length > 300 ? s.slice(0,300) : s;
+}
+function ok(x) { if (x?.error) throw x.error; return x.data; }
+const safeUrl = raw => { try { const url = new URL(raw); return ['http:', 'https:'].includes(url.protocol) ? url.href : ''; } catch { return ''; } };
+function zoneParts(d=new Date()) {
+  const parts = new Intl.DateTimeFormat('en-GB', {timeZone:CFG.teacherTimeZone, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hourCycle:'h23'}).formatToParts(d);
+  return Object.fromEntries(parts.map(p=>[p.type,p.value]));
+}
+function localISO(day,time) {
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(day)||!/^\d{2}:\d{2}$/.test(time)) throw Error('Enter a valid deadline.');
+  const [y,m,d] = day.split('-').map(Number),[hh,mm] = time.split(':').map(Number);
+  const target=Date.UTC(y,m-1,d,hh,mm),test=new Date(target);
+  if(test.getUTCFullYear()!==y||test.getUTCMonth()!==m-1||test.getUTCDate()!==d||hh>23||mm>59) throw Error('Invalid date or time.');
+  let epoch=target;
+  for(let n=0;n<4;n++){
+    const p=zoneParts(new Date(epoch));
+    const shown=Date.UTC(+p.year,+p.month-1,+p.day,+p.hour,+p.minute,+p.second);
+    epoch += target-shown;
+  }
+  const verify=zoneParts(new Date(epoch));
+  if(`${verify.year}-${verify.month}-${verify.day} ${verify.hour}:${verify.minute}`!==`${day} ${time}`) throw Error('This local time is not valid in Cairo.');
+  return new Date(epoch).toISOString();
+}
+const futureDate = (days=1) => { const p=zoneParts(new Date(Date.now()+86400000*days));return `${p.year}-${p.month}-${p.day}`; };
+function fmt(value, short=false) {
+  if (!value) return 'Not set';
+  return new Intl.DateTimeFormat('en-GB',{timeZone:CFG.teacherTimeZone,day:'numeric',month:'short', ...(short?{}:{year:'numeric'}),hour:'2-digit',minute:'2-digit',hour12:true}).format(new Date(value));
+}
+const remaining = due => Math.round((new Date(due).getTime()-Date.now())/60000);
+function timeLeft(due){const n=remaining(due);if(n<=0)return 'Deadline passed';if(n<60)return `${n} min left`;if(n<1440)return `${Math.floor(n/60)}h ${n%60}m left`;return `${Math.ceil(n/1440)} day${n<2880?'':'s'} left`;}
+function firstName(raw){return text(raw).replace(/^dr\.?\s+/i,'').split(/\s+/)[0]||'Future Doctor';}
+function dr(raw){return 'Dr. '+firstName(raw);}
+function greeting(raw){
+  const hour=+zoneParts().hour,name=dr(raw);
+  if(hour>=5 && hour<12)return [`Good morning, ${name}!`, 'A fresh day. A fresh opportunity.'];
+  if(hour>=12 && hour<17)return [`Good afternoon, ${name}!`, 'A little progress today goes a long way.'];
+  if(hour>=17 && hour<22)return [`Good evening, ${name}!`, 'Another day, another step closer to your white coat.'];
+  return [`Late-night study session, ${name}?`, 'Your dreams matter. Your rest does too.'];
+}
+function status(a){
+  const s=state.submissions.find(x=>x.assignment_id===a.id);
+  if (s) return s.late?'late':'submitted';
+  if(a.status==='archived') return 'archived';
+  const n=remaining(a.due_at);return n<=0?'overdue':n<=120?'soon':'pending';
+}
+const matchingSubmission = id => state.submissions.find(s=>s.assignment_id===id);
+function chip(st){const labels={pending:'To do',soon:'Due soon',overdue:'Overdue',submitted:'Sent',late:'Sent late',archived:'Archived'};const klass={submitted:'good',late:'good',soon:'warn',overdue:'bad',archived:'neutral',pending:'neutral'};return `<span class="chip ${klass[st]||'neutral'}">${labels[st]||esc(st)}</span>`;}
+function studentEmail(code) {return text(code).toLowerCase().replace(/[^a-z0-9._-]/g,'-')+'@students.drmark.local';}
+function generateString(length=10){const letters='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';const bytes=new Uint8Array(length);crypto.getRandomValues(bytes);return Array.from(bytes,n=>letters[n%letters.length]).join('');}
+function loadScreen(message='Opening your portal...') {root.innerHTML=`<div class="initial"><div class="spinner"></div><span>${esc(message)}</span></div>`;}
+function showLogin(message='') {
+  state.user=null;state.profile=null;state.student=null;
+  const teacher=state.roleChoice==='teacher';
+  root.innerHTML=`<main class="login-wrap"><div class="login-brand"><img src="assets/k_chromosome.png" alt="Dr Mark logo"><div class="eyebrow">YOUR PATH TO THE WHITE COAT</div><h1>DR Mark Portal</h1><p>Small steps. Remarkable futures.</p></div>
+  <section class="panel login-panel"><h2>Welcome back</h2><p class="tagline">A private learning space made just for you.</p>
+  <div class="tabs" role="tablist" aria-label="Choose your login type"><button type="button" data-action="mode" data-mode="student" class="${!teacher?'on':''}">I'm a student</button><button type="button" data-action="mode" data-mode="teacher" class="${teacher?'on':''}">I'm the teacher</button></div>
+  ${message?`<div class="notice danger" role="alert" style="margin-bottom:16px">${esc(message)}</div>`:''}
+  <form id="login-form" class="form-stack">
+  <label class="field">${teacher?'Teacher email':'Your student code'}<input name="identity" ${teacher?'type="email"':'type="text"'} autocomplete="username" placeholder="${teacher?'name@example.com':'e.g. DM-A1B2C3'}" required></label>
+  <label class="field">Password<input name="password" type="password" autocomplete="current-password" minlength="6" required></label>
+  <button class="button primary full" type="submit">Sign in securely</button></form>
+  <p class="fineprint" style="margin-top:20px">Student accounts are created by Dr Mark. Public sign-up is disabled.</p></section>
+  <p class="fineprint" style="margin-top:22px;text-align:center">One step closer to your white coat.</p></main>`;
+}
+async function boot() {
+  if(state.booted)return;state.booted=true;
+  loadScreen();
+  try{
+    const {data:{session}}=await sb.auth.getSession();
+    if(!session){showLogin();return;}
+    await authorize();
+  }catch(e){console.error(e);showLogin('We could not restore your session. Please sign in.');}
+}
+async function authorize() {
+  loadScreen('Preparing your personal workspace...');
+  const {data:{user},error}=await sb.auth.getUser();
+  if(error||!user){showLogin('Your session has expired. Please sign in.');return;}
+  const p=ok(await sb.from('portal_profiles').select('id,role,full_name').eq('id',user.id).maybeSingle());
+  if(!p||!['teacher','student'].includes(p.role)){
+    await sb.auth.signOut();showLogin('This account has no Portal access. Your MCQ application login is a separate service.');return;
+  }
+  state.user=user;state.profile=p;state.roleChoice=p.role;
+  await reload(false);
+}
+async function reload(withToast=false){
+  const queries=[
+    sb.from('portal_settings').select('brand_name,teacher_name,subjects,default_due_time,whatsapp_number').eq('id',1).maybeSingle(),
+    sb.from('portal_students').select('id,name,code,subjects,auth_user_id,is_active,created_at').order('created_at',{ascending:false}),
+    sb.from('portal_assignments').select('id,student_id,title,subject,topic,instructions,due_at,marks,priority,external_link,status,created_at').order('due_at',{ascending:true}),
+    sb.from('portal_submissions').select('id,assignment_id,student_id,note,submitted_at,late,status,score,max_score,feedback,reviewed_at').order('submitted_at',{ascending:false}),
+    sb.from('portal_messages').select('id,student_id,body,created_at').order('created_at',{ascending:false}).limit(250),
+    sb.from('portal_deadline_reminders').select('id,assignment_id,student_id,kind,created_at').order('created_at',{ascending:false}).limit(250)
+  ];
+  const r=await Promise.all(queries),data=r.map(ok);
+  [state.settings,state.students,state.assignments,state.submissions,state.messages,state.reminders]=[data[0]||{},data[1]||[],data[2]||[],data[3]||[],data[4]||[],data[5]||[]];
+  if(state.profile.role==='student'){
+    state.student=state.students.find(s=>s.auth_user_id===state.user.id);
+    if(!state.student||!state.student.is_active) {root.innerHTML='<div class="initial">Your portal account is inactive. Please contact Dr Mark.</div>';return;}
+  }
+  render();
+  if(state.profile.role==='student'){announceBrowserReminders();}
+  if(withToast)toast('Everything is up to date.');
+}
+async function signIn(form){
+  const fd=new FormData(form), identity=text(fd.get('identity')),password=String(fd.get('password')||'');
+  const button=form.querySelector('button[type=submit]');button.disabled=true;button.textContent='Signing in...';
+  try{
+    const email=state.roleChoice==='student'?studentEmail(identity):identity;
+    ok(await sb.auth.signInWithPassword({email,password}));
+    await authorize();
+  }catch(e){await sb.auth.signOut();showLogin(errorText(e));}
+}
+async function logout(){await sb.auth.signOut();state.user=null;state.profile=null;state.student=null;state.settings={};state.students=[];state.assignments=[];state.submissions=[];state.messages=[];state.reminders=[];showLogin();toast('Signed out safely.');}
+function shell(html){
+  const teacher=state.profile.role==='teacher';
+  const name=teacher?(state.profile.full_name||'Teacher'):dr(state.student?.name||'Student');
+  root.innerHTML=`<div class="shell"><header class="topbar"><div class="brand"><img class="logo" src="assets/k_chromosome.png" alt="Dr Mark logo"><div><strong>DR Mark Portal</strong><span>${teacher?'Teacher workspace':'YOUR PRIVATE STUDY SPACE'}</span></div></div><div class="top-actions"><span class="header-name">${esc(name)}</span><button class="button ghost slim" data-action="logout">Sign out</button></div></header>${html}<footer class="footer"><span>DR Mark Portal &middot; Made for future doctors</span><span>All deadlines use Cairo time</span></footer></div>`;
+}
+function render(){if(!state.profile){showLogin();return;}if(state.profile.role==='teacher')renderTeacher();else renderStudent();}
+function panelStat(n,label,extra=''){return `<div class="panel"><div class="stat-value">${n}</div><div class="stat-label">${label}</div>${extra?`<div class="tiny-muted">${extra}</div>`:''}</div>`;}
+function teacherCard(a){
+  const s=matchingSubmission(a.id),st=status(a),name=state.students.find(x=>x.id===a.student_id)?.name||'Student';
+  return `<article class="work-card" data-kind="${st}"><div class="split"><div><div class="work-title">${esc(a.title)}</div><div class="work-meta"><span>${esc(name)}</span><span>&middot;</span><span>Due ${esc(fmt(a.due_at))}</span></div></div>${chip(st)}</div>
+  ${s?`<div class="submission-detail"><span class="success-dot"></span><span>${esc(dr(name))} marked this as sent ${esc(fmt(s.submitted_at))}${s.late?' (after deadline)':''}.</span></div>${s.note?`<p class="small muted">Student note: ${esc(s.note)}</p>`:''}`:`<p class="list-meta">${esc(timeLeft(a.due_at))}</p>`}
+  <div class="button-row"><button class="button slim" data-action="edit-work" data-id="${esc(a.id)}">Edit homework</button>${s?`<button class="button slim ghost" data-action="feedback" data-id="${esc(s.id)}">${s.feedback||s.score!=null?'Edit feedback':'Leave feedback'}</button>`:''}<button class="button slim ghost" data-action="archive-work" data-id="${esc(a.id)}">${a.status==='archived'?'Restore':'Archive'}</button></div>
+  ${s?.feedback?`<p class="small muted">Your feedback: ${esc(s.feedback)}</p>`:''}
+  </article>`;
+}
+function teacherStudentCard(s){
+  const work=state.assignments.filter(a=>a.student_id===s.id && a.status!=='archived'),done=work.filter(a=>matchingSubmission(a.id)).length;
+  return `<article class="panel student-overview"><div class="space-between"><div><div class="student-name">${esc(dr(s.name))}</div><p class="small muted">${esc(s.code)}</p></div>${s.is_active?'<span class="chip good">Active</span>':'<span class="chip neutral">Inactive</span>'}</div>
+    <p class="small muted" style="margin-top:14px">${done} of ${work.length} homework tasks submitted</p><div class="progress-track"><span style="width:${work.length?Math.round(done/work.length*100):0}%"></span></div>
+    <div class="button-row" style="margin-top:16px"><button class="button slim" data-action="reset-pin" data-id="${esc(s.id)}">Reset password</button><button class="button slim ghost" data-action="send-message" data-id="${esc(s.id)}">Message</button><button class="button slim ghost" data-action="toggle-student" data-id="${esc(s.id)}">${s.is_active?'Deactivate':'Reactivate'}</button></div></article>`;
+}
+function renderTeacher(){
+  const active=state.students.filter(s=>s.is_active),works=state.assignments.filter(a=>a.status!=='archived'),done=works.filter(a=>matchingSubmission(a.id)).length,
+    overdue=works.filter(a=>status(a)==='overdue').length, waiting=works.length-done,
+    filtered=state.assignments.filter(a=>state.filter==='all'?a.status!=='archived':state.filter==='archived'?a.status==='archived':state.filter==='sent'?!!matchingSubmission(a.id):state.filter==='overdue'?status(a)==='overdue':!matchingSubmission(a.id)&&a.status!=='archived');
+  const sResults=state.students.filter(s=>(s.name+' '+s.code).toLowerCase().includes(state.studentSearch.toLowerCase()));
+  shell(`<section class="hero teacher-hero"><div class="hero-copy"><div class="eyebrow">TEACHER OVERVIEW</div><h1>Beautifully simple follow-up.</h1><p>Assign in seconds. Trust your students. See exactly who has finished, without managing a pile of PDFs.</p></div><img class="hero-mark" src="assets/k_chromosome.png" alt=""></section>
+  <div class="button-row main-actions"><button class="button primary" data-action="new-homework" ${active.length?'':'disabled'}>+ New homework</button><button class="button" data-action="new-student">+ New student</button><button class="button ghost" data-action="settings">Settings</button><button class="button ghost" data-action="refresh">Refresh</button></div>
+  <section class="panels" aria-label="Overview">${panelStat(active.length,'Active students')}${panelStat(waiting,'Awaiting submission')}${panelStat(done,'Marked as sent')}${panelStat(overdue,'Overdue')}</section>
+  <section><div class="section-title"><h2>Homework</h2><span class="muted small">${works.length} assigned tasks</span></div><div class="filters">${[['all','All'],['waiting','Waiting'],['sent','Sent'],['overdue','Overdue'],['archived','Archived']].map(([id,label])=>`<button class="filter ${state.filter===id?'on':''}" data-action="filter" data-filter="${id}">${label}</button>`).join('')}</div>
+  <div class="items">${filtered.length?filtered.map(teacherCard).join(''):`<div class="empty"><strong>${state.assignments.length?'Nothing in this category.':'Your next homework starts here.'}</strong><p>Only a title and a deadline are needed. We take care of the rest.</p>${!state.assignments.length?`<button class="button primary" data-action="new-homework" ${active.length?'':'disabled'} style="margin-top:15px">Add first homework</button>`:''}</div>`}</div></section>
+  <section><div class="section-title"><h2>Your students</h2><button class="button slim ghost" data-action="new-student">Add student</button></div>
+  ${state.students.length>5?`<label class="field" style="margin-bottom:15px"><span class="sr-only">Search students</span><input id="student-search" placeholder="Search by name or student code" value="${esc(state.studentSearch)}" autocomplete="off"></label>`:''}
+  <div id="student-results">${sResults.length?`<div class="grid2">${sResults.map(teacherStudentCard).join('')}</div>`:`<div class="empty"><strong>${state.students.length?'No matching students yet.':'A personal space for every future doctor.'}</strong><p>Add your first student. Their login code and password will be generated for you.</p></div>`}</div></section>
+  <div class="notice footer-note"><strong>WhatsApp-first by design.</strong> PDFs stay in WhatsApp. Only homework details, student checkmarks, notes and timestamps are saved here.</div>`);
+}
+function studentCard(a){
+  const s=matchingSubmission(a.id),st=status(a),remainingMin=remaining(a.due_at),safe=safeUrl(a.external_link),name=state.student?.name||'Student';
+  const number=String(state.settings.whatsapp_number||'').replace(/\D/g,'');
+  const shareText=`DR Mark homework: ${a.title}\nStudent: ${dr(name)}\nI am sending my answers as a PDF.`;
+  const waUrl=number?`https://wa.me/${number}?text=${encodeURIComponent(shareText)}`:`https://api.whatsapp.com/send?text=${encodeURIComponent(shareText)}`;
+  return `<article class="work-card student-task"><div class="split"><div><div class="work-title">${esc(a.title)}</div><div class="work-meta">${a.subject?`<span>${esc(a.subject)}</span><span>&middot;</span>`:''}<span>Due ${esc(fmt(a.due_at))}</span></div></div>${chip(st)}</div>
+   ${a.instructions?`<p class="task-instruction">${esc(a.instructions)}</p>`:''}${safe?`<p class="small"><a href="${esc(safe)}" target="_blank" rel="noopener noreferrer">Open teacher's link &nearr;</a></p>`:''}
+   ${s?`<div class="sent-state"><span class="sent-symbol">&#10003;</span><div><strong>Another promise kept, ${esc(dr(name))}.</strong><p class="small muted">Marked as sent ${esc(fmt(s.submitted_at))}${s.late?' &middot; after the deadline':''}</p>${s.note?`<p class="small note-saved">Your note: ${esc(s.note)}</p>`:''}${s.feedback?`<p class="small note-saved">Dr Mark: ${esc(s.feedback)}</p>`:''}${s.score!==null&&s.score!==undefined?`<p class="small note-saved">Score: ${esc(s.score)} / ${esc(s.max_score??a.marks)}</p>`:''}</div></div>`:
+   `<div class="task-steps"><span class="small muted">${remainingMin>0?`<strong data-due="${esc(a.due_at)}">${esc(timeLeft(a.due_at))}</strong> &middot; `:''}Send your PDF on WhatsApp, then tick below.</span>
+   <a class="button whatsapp-link" href="${esc(waUrl)}" target="_blank" rel="noopener noreferrer">Open WhatsApp &nearr;</a></div>
+   <div class="quote-card"><span class="quote-mark">&ldquo;</span>There is always an excuse to submit late. And there is always a way to submit on time.<span class="quote-mark">&rdquo;</span></div>
+   <label class="field optional-note">Optional note<textarea id="note-${esc(a.id)}" rows="2" maxlength="1500" placeholder="Anything you want Dr Mark to know? (optional)"></textarea></label>
+   <label class="submit-check"><input type="checkbox" data-action="submit-work" data-id="${esc(a.id)}"><span>I've sent my work on WhatsApp</span></label>`}
+  </article>`;
+}
+function renderStudent(){
+  const name=state.student.name,[hi,sub]=greeting(name);
+  const active=state.assignments.filter(a=>a.status!=='archived'),pending=active.filter(a=>!matchingSubmission(a.id)),sent=active.filter(a=>!!matchingSubmission(a.id)),overdue=pending.filter(a=>status(a)==='overdue').length;
+  const urgency=pending.filter(a=>remaining(a.due_at)>0&&remaining(a.due_at)<=120);
+  const reminders=state.reminders.filter(n=>!state.submissions.some(s=>s.assignment_id===n.assignment_id)).slice(0,10);
+  shell(`<section class="hero student-hero"><div class="hero-copy"><div class="eyebrow">YOUR PRIVATE STUDY SPACE</div><h1>${esc(hi)}</h1><p>${esc(sub)}</p><p class="micro-motto">ONE STEP CLOSER TO YOUR WHITE COAT</p></div><img class="hero-mark" src="assets/k_chromosome.png" alt=""></section>
+    ${urgency.length?`<div class="notice deadline-strip"><strong>Gentle reminder, ${esc(dr(name))}.</strong> ${esc(urgency[0].title)} is due in ${esc(timeLeft(urgency[0].due_at))}.</div>`:''}
+    <section class="panels">${panelStat(pending.length,'Still to do')}${panelStat(sent.length,'Promises kept')}${panelStat(overdue,'Past deadline')}</section>
+    <section><div class="section-title"><h2>Your homework</h2><button class="button ghost slim" data-action="refresh">Refresh</button></div><div class="items">${pending.length?pending.map(studentCard).join(''):`<div class="empty celebration"><div class="empty-symbol">&#10022;</div><strong>All done, ${esc(dr(name))}.</strong><p>Nothing left to submit. Take a moment to be proud of yourself.</p></div>`}</div></section>
+    ${sent.length?`<section><div class="section-title"><h2>Sent on WhatsApp</h2><span class="muted small">Every effort counts</span></div><div class="items">${sent.map(studentCard).join('')}</div></section>`:''}
+    <section><div class="section-title"><h2>Messages & reminders</h2></div><div class="items">${reminders.map(r=>{const a=state.assignments.find(x=>x.id===r.assignment_id);return a?`<div class="panel soft mini-message"><span class="chip warn">Reminder</span><div><strong>${esc(a.title)}</strong><p class="muted small">${r.kind==='2h'?'About 2 hours to go':'About a day to go'} &middot; Due ${esc(fmt(a.due_at))}</p></div></div>`:''}).join('')}${state.messages.slice(0,15).map(m=>`<div class="panel soft mini-message"><span class="chip neutral">From Dr Mark</span><div><p>${esc(m.body)}</p><p class="muted small">${esc(fmt(m.created_at))}</p></div></div>`).join('')}${!reminders.length&&!state.messages.length?`<div class="empty"><strong>Nothing new right now.</strong><p>When it's important, you'll see it here.</p></div>`:''}</div>
+    <div class="panel soft browser-notify"><div><h3>A gentle nudge</h3><p class="muted small">Enable browser alerts for deadline reminders while this website is open. Reminders are also saved here even if you close it.</p></div><button class="button slim" data-action="enable-alerts">Enable alerts</button></div></section>`);
+  refreshCountdowns();
+}
+function refreshCountdowns(){document.querySelectorAll('[data-due]').forEach(el=>el.textContent=timeLeft(el.getAttribute('data-due')));}
+function modal(title,html,footer=''){
+  modalRoot.innerHTML=`<section class="dialog" role="dialog" aria-modal="true" aria-label="${esc(title)}"><div class="dialog-head"><h2>${esc(title)}</h2><button class="icon-button" type="button" data-action="close-modal" aria-label="Close">&times;</button></div>${html}${footer||''}</section>`;
+  modalRoot.hidden=false;
+  setTimeout(()=>modalRoot.querySelector('input,textarea,select,button')?.focus(),20);
+}
+function closeModal(){modalRoot.hidden=true;modalRoot.innerHTML='';}
+function footer(label){return `<div class="dialog-footer"><button class="button ghost" type="button" data-action="close-modal">Cancel</button><button class="button primary" type="submit">${esc(label)}</button></div>`;}
+function homeworkModal(a=null){
+  const day=a?(()=>{const p=zoneParts(new Date(a.due_at));return `${p.year}-${p.month}-${p.day}`;})():futureDate();
+  const time=a?(()=>{const p=zoneParts(new Date(a.due_at));return `${p.hour}:${p.minute}`;})():(state.settings.default_due_time||CFG.defaultDueTime).slice(0,5);
+  const students=state.students.filter(s=>s.is_active);
+  if(!a && !students.length){toast('Add a student first.',true);return;}
+  const options=students.map(s=>`<label class="checkline"><input type="checkbox" name="student_ids" value="${esc(s.id)}" checked> ${esc(s.name)}</label>`).join('');
+  modal(a?'Edit homework':'Quick add homework', `<form id="homework-form" data-id="${a?esc(a.id):''}" class="form-stack">
+    <label class="field">Homework title <span class="required">*</span><input name="title" maxlength="180" placeholder="e.g. Biology Paper 2" value="${esc(a?.title||'')}" required></label>
+    <div class="fields-two"><label class="field">Deadline <span class="required">*</span><input type="date" name="date" value="${day}" required></label><label class="field">Time (Cairo)<input type="time" name="time" value="${time}" required></label></div>
+    ${!a?`<details class="advanced"><summary>Students (${students.length} selected by default)</summary><div class="selection-list"><label class="checkline"><input type="checkbox" id="all-students" checked> Select / deselect all</label>${options}</div></details>`:''}
+    <details class="advanced"><summary>Extra details (optional)</summary><div class="form-stack">
+    <label class="field">Subject<input name="subject" maxlength="90" placeholder="e.g. AS Biology" value="${esc(a?.subject||'')}"></label>
+    <label class="field">Instructions<textarea name="instructions" maxlength="4000" rows="3" placeholder="Optional instructions">${esc(a?.instructions||'')}</textarea></label>
+    <label class="field">Link to a reference or past paper<input name="external_link" type="url" placeholder="https://" value="${esc(a?.external_link||'')}"></label>
+    </div></details><p class="fineprint">PDFs will be sent through WhatsApp. The portal saves only the student's checkmark and optional note.</p>
+    ${footer(a?'Save changes':'Assign homework')}</form>`);
+}
+function studentModal(){
+  modal('Add future doctor',`<form class="form-stack" id="student-form">
+  <label class="field">Student's full name <span class="required">*</span><input name="name" placeholder="e.g. Malak Ahmed" maxlength="140" required></label>
+  <p class="helper">A unique student code and a strong password will be generated automatically.</p>
+  <details class="advanced"><summary>More details (optional)</summary><div class="form-stack">
+  <label class="field">Subjects (comma-separated)<input name="subjects" placeholder="AS Biology, OL Biology"></label>
+  <label class="field">Student phone<input name="phone" type="tel" placeholder="Optional"></label>
+  <label class="field">Parent phone<input name="parent_phone" type="tel" placeholder="Optional"></label>
+  </div></details>${footer('Create student')}</form>`);
+}
+function credentialsModal(code,pin,name){
+  modal('Student access created',`<div class="notice good"><strong>${esc(name)}'s private account is ready.</strong><p>Copy these details now. The password is not saved in the portal dashboard.</p></div>
+  <div class="cred"><small>STUDENT CODE</small><code>${esc(code)}</code></div><div class="cred" style="margin-top:10px"><small>TEMPORARY PASSWORD</small><code>${esc(pin)}</code></div>
+  <div class="dialog-footer"><button class="button primary" data-action="copy-credentials" data-code="${esc(code)}" data-pin="${esc(pin)}">Copy login details</button><button class="button ghost" data-action="close-modal">Done</button></div>`);
+}
+function settingsModal(){
+  modal('Portal settings',`<form id="settings-form" class="form-stack">
+  <label class="field">Your WhatsApp number <small>Optional, international format, e.g. 201234567890</small><input name="whatsapp" inputmode="tel" value="${esc(state.settings.whatsapp_number||'')}" placeholder="Country code + phone"></label>
+  <label class="field">Default homework time<input type="time" name="default_time" value="${esc((state.settings.default_due_time||CFG.defaultDueTime).slice(0,5))}"></label>
+  <p class="helper">If no WhatsApp number is entered, students can still share a prepared message and choose your chat manually. Neither choice uploads PDFs to this website.</p>
+  ${footer('Save settings')}</form>`);
+}
+function feedbackModal(s){
+  modal('Feedback (optional)',`<form id="feedback-form" data-id="${esc(s.id)}" class="form-stack">
+  <label class="field">A few words for your student<textarea name="feedback" maxlength="3000" rows="3" placeholder="Something to encourage them, or a tip for next time...">${esc(s.feedback||'')}</textarea></label>
+  <div class="fields-two"><label class="field">Mark (optional)<input type="number" name="score" min="0" step="0.5" value="${s.score??''}"></label><label class="field">Out of (optional)<input type="number" name="max_score" min="0.5" step="0.5" value="${s.max_score??''}"></label></div>
+  ${footer('Save feedback')}</form>`);
+}
+function messageModal(studentId){
+  const s=state.students.find(x=>x.id===studentId);
+  if(!s)return;
+  modal(`A note for ${dr(s.name)}`,`<form id="message-form" data-id="${esc(studentId)}" class="form-stack"><label class="field">Your message<textarea name="body" rows="4" maxlength="1500" required placeholder="A small reminder or a word of encouragement..."></textarea></label>${footer('Send message')}</form>`);
+}
+function resetPinModal(studentId){
+  const s=state.students.find(x=>x.id===studentId);if(!s)return;
+  const pin=generateString(12);
+  modal('Reset student password',`<form id="reset-form" data-id="${esc(studentId)}" class="form-stack"><p class="helper">A new strong password has been generated for ${esc(dr(s.name))}. Resetting will invalidate the previous password for future logins.</p>
+  <label class="field">New password<input name="pin" value="${esc(pin)}" minlength="6" maxlength="100" required></label>${footer('Reset password')}</form>`);
+}
+async function newStudent(form){
+  const fd=new FormData(form), name=text(fd.get('name'));
+  if(!name)throw Error('A student name is required.');
+  const code='DM-'+generateString(7).toUpperCase(),pin=generateString(13);
+  const {data,error}=await sb.functions.invoke('portal-student-admin',{body:{action:'create',name,code,pin,subjects:text(fd.get('subjects')).split(',').map(s=>s.trim()).filter(Boolean),phone:text(fd.get('phone'))||null,parent_phone:text(fd.get('parent_phone'))||null}});
+  if(error||!data?.ok)throw Error(data?.error||error?.message||'Could not create this account.');
+  await reload();credentialsModal(code,pin,name);
+}
+async function createOrEditHomework(form){
+  const fd=new FormData(form), id=text(form.getAttribute('data-id')),
+    title=text(fd.get('title')),due_at=localISO(text(fd.get('date')),text(fd.get('time'))),
+    link=text(fd.get('external_link'));
+  if(!title)throw Error('The homework title is required.');
+  if(link&&!safeUrl(link))throw Error('The link needs to start with https:// or http://');
+  const base={title,due_at,subject:text(fd.get('subject'))||null,instructions:text(fd.get('instructions')),external_link:link||null};
+  if(id){ok(await sb.from('portal_assignments').update(base).eq('id',id));}
+  else{
+    const ids=fd.getAll('student_ids').map(String);
+    if(!ids.length)throw Error('Choose at least one student.');
+    const activeIds=new Set(state.students.filter(x=>x.is_active).map(s=>s.id));
+    if(ids.some(x=>!activeIds.has(x)))throw Error('One of the selected students is no longer active.');
+    const rows=ids.map(student_id=>({...base,student_id,status:'open',priority:'Normal',marks:10}));
+    ok(await sb.from('portal_assignments').insert(rows));
+  }
+  closeModal();await reload();toast(id?'Homework updated.':'Homework assigned. One step closer!');
+}
+async function studentSubmit(checkbox){
+  const id=checkbox.getAttribute('data-id'),a=state.assignments.find(x=>x.id===id);
+  if(!a||matchingSubmission(id)){checkbox.checked=true;return;}
+  checkbox.disabled=true;
+  const note=text($('note-'+id)?.value).slice(0,1500);
+  try{
+    ok(await sb.from('portal_submissions').insert({assignment_id:id,student_id:state.student.id,attempt_no:1,note:note||null,status:'submitted'}));
+    await reload();toast('Another promise kept, '+dr(state.student.name)+'.');
+  }catch(e){checkbox.disabled=false;checkbox.checked=false;toast(errorText(e),true);}
+}
+async function saveFeedback(form){
+  const fd=new FormData(form),id=form.getAttribute('data-id'),feedback=text(fd.get('feedback')),
+        scoreVal=text(fd.get('score')),maxVal=text(fd.get('max_score')),
+        score=scoreVal===''?null:Number(scoreVal),max_score=maxVal===''?null:Number(maxVal);
+  if((score!==null&&max_score===null)||(score!==null&&(!Number.isFinite(score)||score<0))||(max_score!==null&&(!Number.isFinite(max_score)||max_score<=0))||(score!==null&&score>max_score))throw Error('Use a valid mark and maximum, or leave both empty.');
+  ok(await sb.from('portal_submissions').update({feedback:feedback||null,score,max_score,status:'reviewed',reviewed_at:new Date().toISOString()}).eq('id',id));
+  closeModal();await reload();toast('Feedback saved.');
+}
+async function saveSettings(form){
+  const fd=new FormData(form),number=text(fd.get('whatsapp')).replace(/\D/g,''),default_time=text(fd.get('default_time'))||'17:00';
+  if(number&&(number.length<8||number.length>15))throw Error('Use a WhatsApp number including country code, without spaces.');
+  ok(await sb.from('portal_settings').update({whatsapp_number:number||null,default_due_time:default_time}).eq('id',1));
+  closeModal();await reload();toast('Settings saved.');
+}
+async function sendMessage(form){
+  const student_id=form.getAttribute('data-id'),body=text(new FormData(form).get('body'));
+  if(!body)throw Error('Write a message first.');
+  ok(await sb.from('portal_messages').insert({student_id,body}));
+  closeModal();toast('Message sent to the student portal.');
+}
+async function resetPin(form){
+  const id=form.getAttribute('data-id'),pin=text(new FormData(form).get('pin'));
+  const {data,error}=await sb.functions.invoke('portal-student-admin',{body:{action:'reset_pin',student_id:id,pin}});
+  if(error||!data?.ok)throw Error(data?.error||error?.message||'Could not reset password.');
+  const s=state.students.find(x=>x.id===id);
+  credentialsModal(s?.code||'',pin,s?.name||'Student');toast('Password reset. Copy the new password.');
+}
+async function updateStudentStatus(id){
+  const s=state.students.find(x=>x.id===id);if(!s)return;
+  if(!window.confirm(`${s.is_active?'Deactivate':'Reactivate'} ${s.name}?`))return;
+  ok(await sb.from('portal_students').update({is_active:!s.is_active}).eq('id',id));
+  await reload();toast('Student status updated.');
+}
+async function archiveWork(id){
+  const a=state.assignments.find(x=>x.id===id);if(!a)return;
+  const nowArchived=a.status!=='archived';
+  if(!window.confirm(`${nowArchived?'Archive':'Restore'} ${a.title}? ${nowArchived?'It will be hidden from the student, but kept for your records.':''}`))return;
+  ok(await sb.from('portal_assignments').update({status:nowArchived?'archived':'open'}).eq('id',id));
+  await reload();toast(nowArchived?'Homework archived.':'Homework restored.');
+}
+function announceBrowserReminders(){
+  if(!state.user||!state.student||typeof Notification==='undefined'||Notification.permission!=='granted')return;
+  const candidates=[];
+  for(const a of state.assignments){
+    if(a.status==='archived'||matchingSubmission(a.id))continue;
+    const n=remaining(a.due_at);
+    if(n>0&&n<=120)candidates.push({key:`2h:${a.id}`,body:`${a.title} is due in ${timeLeft(a.due_at)}. You've got this!`});
+    else if(n>120&&n<=1440)candidates.push({key:`24h:${a.id}`,body:`${a.title} is due tomorrow. One step at a time.`});
+  }
+  for(const item of candidates){
+    const k=`drmark-alert:${state.user.id}:${item.key}`;
+    if(localStorage.getItem(k))continue;
+    try{new Notification('A gentle reminder from Dr Mark',{body:item.body,icon:'assets/k_chromosome.png',tag:item.key});localStorage.setItem(k,'1');}catch(e){console.warn('Browser notifications unavailable',e);}
+  }
+}
+async function enableAlerts(){
+  if(!('Notification' in window)){toast('Browser notifications are unavailable on this device.',true);return;}
+  if(!window.isSecureContext){toast('Notifications require an HTTPS website.',true);return;}
+  const res=await Notification.requestPermission();
+  if(res==='granted'){toast('Alerts enabled while the portal is open.');announceBrowserReminders();}
+  else toast('You can still see all your reminders inside the portal.');
+}
+// A single event handler avoids losing actions whenever the dashboard re-renders.
+document.addEventListener('click',async e=>{
+  const el=e.target.closest('[data-action]');if(!el)return;
+  const action=el.getAttribute('data-action'),id=el.getAttribute('data-id');
+  if(el.tagName==='BUTTON')e.preventDefault();
+  if(state.busy&&!['close-modal','mode'].includes(action))return;
+  try{
+    if(action==='mode'){state.roleChoice=el.getAttribute('data-mode');showLogin();}
+    else if(action==='close-modal')closeModal();
+    else if(action==='logout')await logout();
+    else if(action==='refresh')await reload(true);
+    else if(action==='new-student')studentModal();
+    else if(action==='new-homework')homeworkModal();
+    else if(action==='edit-work')homeworkModal(state.assignments.find(a=>a.id===id));
+    else if(action==='archive-work')await archiveWork(id);
+    else if(action==='filter'){state.filter=el.getAttribute('data-filter');renderTeacher();}
+    else if(action==='settings')settingsModal();
+    else if(action==='feedback')feedbackModal(state.submissions.find(s=>s.id===id));
+    else if(action==='reset-pin')resetPinModal(id);
+    else if(action==='send-message')messageModal(id);
+    else if(action==='toggle-student')await updateStudentStatus(id);
+    else if(action==='enable-alerts')await enableAlerts();
+    else if(action==='copy-credentials'){
+      const s=`DR Mark Portal\nStudent code: ${el.getAttribute('data-code')}\nPassword: ${el.getAttribute('data-pin')}\nWebsite: ${location.origin+location.pathname}`;
+      await navigator.clipboard.writeText(s);toast('Student login details copied.');
+    }
+  }catch(err){console.error(err);toast(errorText(err),true);}
+});
+document.addEventListener('change',e=>{
+  const el=e.target;
+  if(el.id==='all-students'){
+    modalRoot.querySelectorAll('input[name=student_ids]').forEach(c=>c.checked=el.checked);
+  }else if(el.matches('input[data-action=submit-work]')&&el.checked){void studentSubmit(el);}
+});
+document.addEventListener('input',e=>{
+  if(e.target.id==='student-search' && state.profile?.role==='teacher'){
+    state.studentSearch=e.target.value;
+    const results=state.students.filter(s=>(s.name+' '+s.code).toLowerCase().includes(state.studentSearch.toLowerCase()));
+    const node=$('student-results');if(node)node.innerHTML=results.length?`<div class="grid2">${results.map(teacherStudentCard).join('')}</div>`:'<div class="empty">No matching students.</div>';
+  }
+});
+document.addEventListener('submit',async e=>{
+  const form=e.target;
+  if(!['login-form','student-form','homework-form','feedback-form','settings-form','message-form','reset-form'].includes(form.id))return;
+  e.preventDefault();if(state.busy)return;
+  state.busy=true;const button=form.querySelector('button[type=submit]');const original=button?.textContent;
+  if(button){button.disabled=true;button.textContent='Saving...';}
+  try{
+    if(form.id==='login-form')await signIn(form);
+    else if(form.id==='student-form')await newStudent(form);
+    else if(form.id==='homework-form')await createOrEditHomework(form);
+    else if(form.id==='feedback-form')await saveFeedback(form);
+    else if(form.id==='settings-form')await saveSettings(form);
+    else if(form.id==='message-form')await sendMessage(form);
+    else if(form.id==='reset-form')await resetPin(form);
+  }catch(err){console.error(err);toast(errorText(err),true);}
+  finally{state.busy=false;if(button&&document.contains(button)){button.disabled=false;button.textContent=original;}}
+});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!modalRoot.hidden)closeModal();});
+modalRoot.addEventListener('click',e=>{if(e.target===modalRoot)closeModal();});
+// The portal stores no homework PDFs and caches no private responses.
+if('serviceWorker' in navigator)window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(console.warn));
+setInterval(()=>{
+  if(!state.profile)return;
+  refreshCountdowns();
+  if(state.profile.role==='student')announceBrowserReminders();
+},60_000);
+setInterval(()=>{if(state.profile?.role==='student'&&!state.busy)reload().catch(console.warn);},3*60_000);
 boot();

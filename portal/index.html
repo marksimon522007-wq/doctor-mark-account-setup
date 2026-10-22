@@ -3,41 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Dr Mark Student Portal</title>
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="description" content="DR Mark Portal - a private space for future doctors to manage homework and deadlines.">
+  <link rel="icon" type="image/png" href="assets/k_chromosome.png">
+  <link rel="apple-touch-icon" href="assets/k_chromosome.png">
+  <link rel="manifest" href="manifest.webmanifest">
   <link rel="stylesheet" href="styles.css">
+  <title>DR Mark Portal | A step closer to the white coat</title>
 </head>
-<body class="pre">
-<canvas id="trail"></canvas>
-<div id="auth" class="auth-shell">
-  <div class="auth-card">
-    <img src="assets/k_chromosome.png" alt="K chromosome" class="auth-logo">
-    <p class="eye">DR MARK</p>
-    <h1>Student Portal</h1>
-    <p class="lead">Homework, resources, feedback and paper checking in one private place.</p>
-    <div class="auth-switch"><button class="on" data-auth-mode="student">Student</button><button data-auth-mode="teacher">Teacher</button></div>
-    <form id="loginForm">
-      <div id="loginFields"></div>
-      <button class="btn gold auth-submit">Enter Portal</button>
-    </form>
-    <p class="mu auth-note" id="authNote"></p>
+<body>
+  <div id="app" aria-live="polite">
+    <div class="initial"><div class="spinner"></div><span>Opening DR Mark Portal...</span></div>
   </div>
-</div>
-<div id="app" hidden>
-  <aside id="side">
-    <div class="brand"><img src="assets/k_chromosome.png" alt="K chromosome"><div><b id="bn"></b><small id="bs"></small></div></div>
-    <nav id="nav"></nav>
-  </aside>
-  <main>
-    <header id="top"><div class="crumb" id="crumb"></div><div class="acts" id="topActs"></div></header>
-    <section id="view"></section>
-  </main>
-</div>
-<div id="modal" hidden></div>
-<div id="toasts"></div>
-<div id="portal" hidden></div>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.1"></script>
-<script src="config.js"></script>
-<script src="motion.js"></script>
-<script src="app.js"></script>
+  <div id="modal" class="modal-wrap" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script src="config.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

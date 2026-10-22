@@ -1,0 +1,14 @@
+{
+  "name":"DR Mark Portal",
+  "short_name":"DR Mark",
+  "description":"Your private homework follow-up space",
+  "start_url":"./",
+  "scope":"./",
+  "display":"standalone",
+  "background_color":"#0b0d10",
+  "theme_color":"#0b0d10",
+  "icons":[
+    {"src":"assets/k_chromosome.png","sizes":"any","type":"image/png","purpose":"any"},
+    {"src":"assets/k_chromosome.png","sizes":"any","type":"image/png","purpose":"any"}
+  ]
+}
