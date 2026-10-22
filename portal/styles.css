@@ -62,3 +62,28 @@ body { background:radial-gradient(820px 550px at 83% -8%,#36281975,transparent 7
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 @media(max-width:850px) {.hero { padding:25px; }.panels { grid-template-columns:repeat(2,minmax(0,1fr)); }.panels .panel:last-child { grid-column:auto; }.browser-notify { align-items:stretch; flex-direction:column; } }
 @media(max-width:520px) {.hero { padding:22px 19px; border-radius:16px; }.hero-mark { width:66px; height:85px; opacity:.57; }.hero h1 { font-size:29px; }.fields-two { grid-template-columns:1fr; }.dialog { padding:19px; }.task-steps { align-items:stretch; flex-direction:column; }.task-steps .whatsapp-link { text-align:center; }.quote-card { font-size:14px; }.student-task { padding:16px; }.mini-message { flex-direction:column; gap:7px; }.main-actions .button { flex:1; }.panels { gap:8px; }.stat-value { font-size:30px; } }
+
+/* Restored signature cinematic chromosome, using the original gold K image. */
+.cm-stage{position:relative;z-index:2;flex:0 0 275px;width:275px;height:320px;display:grid;place-items:center;perspective:900px;isolation:isolate;cursor:pointer;outline-offset:4px;user-select:none;-webkit-tap-highlight-color:transparent}
+.cm-stage:focus-visible{outline:2px solid #e5c486;border-radius:22px}
+.cm-fly{position:relative;z-index:3;width:188px;height:300px;will-change:transform}
+.cm-idle,.cm-parallax{height:100%;width:100%}
+.cm-floating{animation:cm-float 7s ease-in-out infinite}
+.cm-parallax{transition:transform .35s ease;transform-style:preserve-3d}
+.cm-parallax img{display:block;width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 20px 23px #000b) drop-shadow(0 0 18px #d7a34b5b)}
+.cm-orbit{pointer-events:none;position:absolute;z-index:1;top:50%;left:50%;width:256px;height:256px;border-radius:50%;border:1px dashed #c299504c;transform:translate(-50%,-50%) rotateX(72deg);animation:cm-orbit 30s linear infinite}
+.cm-pedestal{pointer-events:none;position:absolute;z-index:1;bottom:8px;left:13%;width:74%;height:75px;border-radius:50%;background:radial-gradient(ellipse at 50% 50%,#85601948,#39260e1f 48%,transparent 74%);transform:rotateX(68deg)}
+.cm-arrival-ring{pointer-events:none;position:absolute;z-index:1;left:50%;top:50%;border:1px solid #c9a04ab8;border-radius:50%;width:240px;height:240px}
+.cm-dust{position:fixed;inset:0;width:100vw;height:100vh;z-index:99999;pointer-events:none}
+@keyframes cm-float{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(-12px) rotate(1.5deg)}}
+@keyframes cm-orbit{from{transform:translate(-50%,-50%) rotateX(72deg) rotateZ(0)}to{transform:translate(-50%,-50%) rotateX(72deg) rotateZ(360deg)}}
+.hero.teacher-hero{min-height:315px}.hero.student-hero{min-height:300px}
+.hero .cm-stage{margin:-15px -8px;flex-shrink:0}
+.login-brand .cm-stage{flex:auto;width:176px;height:210px;margin:0 auto 6px}
+.login-brand .cm-fly{width:116px;height:186px}
+.login-brand .cm-orbit{width:164px;height:164px}
+.login-brand .cm-pedestal{height:40px;bottom:13px}
+.login-brand .cm-arrival-ring{width:164px;height:164px}
+@media(max-width:850px){.hero .cm-stage{flex-basis:192px;width:192px;height:260px;margin:-7px -15px}.hero .cm-fly{width:147px;height:237px}.hero .cm-orbit{width:185px;height:185px}.hero .cm-arrival-ring{width:180px;height:180px}}
+@media(max-width:520px){.hero{flex-direction:column;align-items:stretch}.hero .cm-stage{align-self:center;flex-basis:auto;width:220px;height:210px;margin:-12px auto -22px}.hero .cm-fly{width:126px;height:203px}.hero .cm-orbit{width:180px;height:180px}.hero .cm-pedestal{height:45px;bottom:2px}.hero.teacher-hero,.hero.student-hero{min-height:unset}.login-brand .cm-stage{width:148px;height:180px}.login-brand .cm-fly{width:104px;height:166px}.login-brand .cm-orbit{width:145px;height:145px}.login-brand .cm-pedestal{bottom:2px}}
+@media(prefers-reduced-motion:reduce){.cm-floating,.cm-orbit{animation:none!important}.cm-parallax{transition:none!important}}
