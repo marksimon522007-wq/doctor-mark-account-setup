@@ -116,6 +116,38 @@ async function boot() {
     await authorize();
   }catch(e){console.error(e);showLogin('We could not restore your session. Please sign in.');}
 }
+
+/* Changes are written to Supabase immediately. These listeners make updates
+   appear promptly in other open teacher/student browser tabs, while retaining
+   a lightweight foreground polling fallback for dropped connections. */
+let portalLiveChannel=null;
+let portalLiveUser=null;
+let portalLiveTimer=null;
+function stopPortalLiveSync() {
+  clearTimeout(portalLiveTimer);
+  if(portalLiveChannel) { void sb.removeChannel(portalLiveChannel); portalLiveChannel=null; }
+  portalLiveUser=null;
+}
+function queuePortalLiveReload() {
+  if(!state.profile || state.busy || document.visibilityState==='hidden' || !modalRoot.hidden)return;
+  clearTimeout(portalLiveTimer);
+  portalLiveTimer=setTimeout(()=>{
+    if(!state.profile || state.busy || !modalRoot.hidden || document.visibilityState==='hidden')return;
+    reload().catch(err=>console.warn('Portal refresh was delayed:',err));
+  },550);
+}
+function startPortalLiveSync() {
+  if(!state.user)return;
+  if(portalLiveChannel && portalLiveUser===state.user.id)return;
+  stopPortalLiveSync();
+  portalLiveUser=state.user.id;
+  let channel=sb.channel('drmark-live-'+state.user.id+'-'+crypto.randomUUID());
+  for(const table of ['portal_assignments','portal_submissions','portal_students','portal_messages']){
+    channel=channel.on('postgres_changes',{event:'*',schema:'public',table},queuePortalLiveReload);
+  }
+  portalLiveChannel=channel.subscribe();
+}
+
 async function authorize() {
   loadScreen('Preparing your personal workspace...');
   const {data:{user},error}=await sb.auth.getUser();
@@ -126,6 +158,7 @@ async function authorize() {
   }
   state.user=user;state.profile=p;state.roleChoice=p.role;
   await reload(false);
+  startPortalLiveSync();
 }
 async function reload(withToast=false){
   const queries=[
@@ -140,7 +173,7 @@ async function reload(withToast=false){
   [state.settings,state.students,state.assignments,state.submissions,state.messages,state.reminders]=[data[0]||{},data[1]||[],data[2]||[],data[3]||[],data[4]||[],data[5]||[]];
   if(state.profile.role==='student'){
     state.student=state.students.find(s=>s.auth_user_id===state.user.id);
-    if(!state.student||!state.student.is_active) {root.innerHTML='<div class="initial">Your portal account is inactive. Please contact Dr Mark.</div>';return;}
+    if(!state.student||!state.student.is_active) {stopPortalLiveSync();root.innerHTML='<div class="initial" style="flex-direction:column;text-align:center;padding:20px">Your portal account is no longer active. Please contact Dr Mark.<button class="button" data-action="logout">Sign out</button></div>';return;}
   }
   render();
   if(state.profile.role==='student'){announceBrowserReminders();}
@@ -155,7 +188,7 @@ async function signIn(form){
     await authorize();
   }catch(e){await sb.auth.signOut();showLogin(errorText(e));}
 }
-async function logout(){await sb.auth.signOut();state.user=null;state.profile=null;state.student=null;state.settings={};state.students=[];state.assignments=[];state.submissions=[];state.messages=[];state.reminders=[];showLogin();toast('Signed out safely.');}
+async function logout(){stopPortalLiveSync();await sb.auth.signOut();state.user=null;state.profile=null;state.student=null;state.settings={};state.students=[];state.assignments=[];state.submissions=[];state.messages=[];state.reminders=[];showLogin();toast('Signed out safely.');}
 function shell(html){
   const teacher=state.profile.role==='teacher';
   const name=teacher?(state.profile.full_name||'Teacher'):dr(state.student?.name||'Student');
@@ -167,7 +200,7 @@ function teacherCard(a){
   const s=matchingSubmission(a.id),st=status(a),name=state.students.find(x=>x.id===a.student_id)?.name||'Student';
   return `<article class="work-card" data-kind="${st}"><div class="split"><div><div class="work-title">${esc(a.title)}</div><div class="work-meta"><span>${esc(name)}</span><span>&middot;</span><span>Due ${esc(fmt(a.due_at))}</span></div></div>${chip(st)}</div>
   ${s?`<div class="submission-detail"><span class="success-dot"></span><span>${esc(dr(name))} marked this as sent ${esc(fmt(s.submitted_at))}${s.late?' (after deadline)':''}.</span></div>${s.note?`<p class="small muted">Student note: ${esc(s.note)}</p>`:''}`:`<p class="list-meta">${esc(timeLeft(a.due_at))}</p>`}
-  <div class="button-row"><button class="button slim" data-action="edit-work" data-id="${esc(a.id)}">Edit homework</button>${s?`<button class="button slim ghost" data-action="feedback" data-id="${esc(s.id)}">${s.feedback||s.score!=null?'Edit feedback':'Leave feedback'}</button>`:''}<button class="button slim ghost" data-action="archive-work" data-id="${esc(a.id)}">${a.status==='archived'?'Restore':'Archive'}</button></div>
+  <div class="button-row"><button class="button slim" data-action="edit-work" data-id="${esc(a.id)}">Edit homework</button>${s?`<button class="button slim ghost" data-action="feedback" data-id="${esc(s.id)}">${s.feedback||s.score!=null?'Edit feedback':'Leave feedback'}</button>`:''}<button class="button slim ghost" data-action="archive-work" data-id="${esc(a.id)}">${a.status==='archived'?'Restore':'Archive'}</button><button class="button slim danger" data-action="delete-work" data-id="${esc(a.id)}">Delete permanently</button></div>
   ${s?.feedback?`<p class="small muted">Your feedback: ${esc(s.feedback)}</p>`:''}
   </article>`;
 }
@@ -175,7 +208,7 @@ function teacherStudentCard(s){
   const work=state.assignments.filter(a=>a.student_id===s.id && a.status!=='archived'),done=work.filter(a=>matchingSubmission(a.id)).length;
   return `<article class="panel student-overview"><div class="space-between"><div><div class="student-name">${esc(dr(s.name))}</div><p class="small muted">${esc(s.code)}</p></div>${s.is_active?'<span class="chip good">Active</span>':'<span class="chip neutral">Inactive</span>'}</div>
     <p class="small muted" style="margin-top:14px">${done} of ${work.length} homework tasks submitted</p><div class="progress-track"><span style="width:${work.length?Math.round(done/work.length*100):0}%"></span></div>
-    <div class="button-row" style="margin-top:16px"><button class="button slim" data-action="reset-pin" data-id="${esc(s.id)}">Reset password</button><button class="button slim ghost" data-action="send-message" data-id="${esc(s.id)}">Message</button><button class="button slim ghost" data-action="toggle-student" data-id="${esc(s.id)}">${s.is_active?'Deactivate':'Reactivate'}</button></div></article>`;
+    <div class="button-row" style="margin-top:16px"><button class="button slim" data-action="reset-pin" data-id="${esc(s.id)}">Reset password</button><button class="button slim ghost" data-action="send-message" data-id="${esc(s.id)}">Message</button><button class="button slim ghost" data-action="toggle-student" data-id="${esc(s.id)}">${s.is_active?'Deactivate':'Reactivate'}</button><button class="button slim danger" data-action="delete-student" data-id="${esc(s.id)}">Delete student</button></div></article>`;
 }
 function renderTeacher(){
   const active=state.students.filter(s=>s.is_active),works=state.assignments.filter(a=>a.status!=='archived'),done=works.filter(a=>matchingSubmission(a.id)).length,
@@ -229,6 +262,28 @@ function modal(title,html,footer=''){
 }
 function closeModal(){modalRoot.hidden=true;modalRoot.innerHTML='';}
 function footer(label){return `<div class="dialog-footer"><button class="button ghost" type="button" data-action="close-modal">Cancel</button><button class="button primary" type="submit">${esc(label)}</button></div>`;}
+
+function dangerFooter(label) {
+  return `<div class="dialog-footer"><button class="button ghost" type="button" data-action="close-modal">Cancel</button><button class="button danger destructive" type="submit">${esc(label)}</button></div>`;
+}
+function deleteHomeworkModal(id) {
+  const a=state.assignments.find(x=>x.id===id);if(!a)return;
+  const student=state.students.find(s=>s.id===a.student_id);
+  const hasSubmission=!!matchingSubmission(a.id);
+  modal('Delete homework permanently',`<form id="delete-homework-form" data-id="${esc(a.id)}" class="form-stack">
+    <div class="destructive-warning"><strong>${esc(a.title)}</strong><p>Assigned to ${esc(student?.name||'this student')}. This will permanently erase the homework, ${hasSubmission?'its submitted checkmark and feedback, ':''}its deadline reminders and related portal records. It cannot be undone.</p></div>
+    <label class="checkline"><input name="understood" type="checkbox" required> I understand this cannot be undone.</label>
+    ${dangerFooter('Delete homework permanently')}</form>`);
+}
+function deleteStudentModal(id) {
+  const s=state.students.find(x=>x.id===id);if(!s)return;
+  const assigned=state.assignments.filter(a=>a.student_id===s.id).length;
+  modal('Delete student permanently',`<form id="delete-student-form" data-id="${esc(s.id)}" class="form-stack">
+    <div class="destructive-warning"><strong>${esc(dr(s.name))}</strong><p>This permanently removes this student from DR Mark Portal, their ${assigned} homework assignments, checkmarks, messages, feedback and any linked Portal files. Portal access is removed. If their login is also used by the separate MCQ licensing system, that MCQ account will be kept.</p><p>This action cannot be undone.</p></div>
+    <label class="field">Type the student's full name to confirm: <strong>${esc(s.name)}</strong><input name="confirm_name" autocomplete="off" spellcheck="false" placeholder="Enter full name exactly" required></label>
+    ${dangerFooter('Delete student permanently')}</form>`);
+}
+
 function homeworkModal(a=null){
   const day=a?(()=>{const p=zoneParts(new Date(a.due_at));return `${p.year}-${p.month}-${p.day}`;})():futureDate();
   const time=a?(()=>{const p=zoneParts(new Date(a.due_at));return `${p.hour}:${p.minute}`;})():(state.settings.default_due_time||CFG.defaultDueTime).slice(0,5);
@@ -365,6 +420,35 @@ async function resetPin(form){
   const s=state.students.find(x=>x.id===id);
   credentialsModal(s?.code||'',pin,s?.name||'Student');toast('Password reset. Copy the new password.');
 }
+
+async function deleteHomeworkPermanently(form) {
+  await requireMatchingPortalSession('teacher');
+  const id=text(form.getAttribute('data-id'));
+  if (!form.querySelector('input[name="understood"]')?.checked) throw Error('Please acknowledge that this deletion is permanent.');
+  const a=state.assignments.find(x=>x.id===id);
+  if(!a)throw Error('Homework not found. Refresh the dashboard.');
+  const {data,error}=await sb.from('portal_assignments').delete().eq('id',id).select('id');
+  if(error)throw error;
+  if(!data?.length)throw Error('Homework was not deleted. Refresh the dashboard and check your login.');
+  closeModal();await reload();toast('Homework permanently deleted.');
+}
+async function deleteStudentPermanently(form) {
+  await requireMatchingPortalSession('teacher');
+  const id=text(form.getAttribute('data-id'));
+  const s=state.students.find(x=>x.id===id);
+  if(!s)throw Error('Student not found. Refresh the dashboard.');
+  const confirmation=text(new FormData(form).get('confirm_name'));
+  if(confirmation.toLowerCase()!==s.name.trim().toLowerCase())throw Error('Please type the student\'s full name exactly.');
+  const {data,error}=await sb.functions.invoke('portal-student-admin',{
+    body:{action:'delete_student',student_id:id,confirm_name:confirmation}
+  });
+  if(error||!data?.ok)throw Error(data?.error||error?.message||'Could not delete this student.');
+  closeModal();await reload();
+  toast(data.preserved_separate_mcq_account?
+    'Student permanently removed from this portal. Separate MCQ account and licenses were preserved.':
+    'Student account and Portal records permanently deleted.');
+}
+
 async function updateStudentStatus(id){
   const s=state.students.find(x=>x.id===id);if(!s)return;
   if(!window.confirm(`${s.is_active?'Deactivate':'Reactivate'} ${s.name}?`))return;
@@ -415,6 +499,8 @@ document.addEventListener('click',async e=>{
     else if(action==='new-homework')homeworkModal();
     else if(action==='edit-work')homeworkModal(state.assignments.find(a=>a.id===id));
     else if(action==='archive-work')await archiveWork(id);
+    else if(action==='delete-work')deleteHomeworkModal(id);
+    else if(action==='delete-student')deleteStudentModal(id);
     else if(action==='filter'){state.filter=el.getAttribute('data-filter');renderTeacher();}
     else if(action==='settings')settingsModal();
     else if(action==='feedback')feedbackModal(state.submissions.find(s=>s.id===id));
@@ -443,7 +529,7 @@ document.addEventListener('input',e=>{
 });
 document.addEventListener('submit',async e=>{
   const form=e.target;
-  if(!['login-form','student-form','homework-form','feedback-form','settings-form','message-form','reset-form'].includes(form.id))return;
+  if(!['login-form','student-form','homework-form','feedback-form','settings-form','message-form','reset-form','delete-homework-form','delete-student-form'].includes(form.id))return;
   e.preventDefault();if(state.busy)return;
   state.busy=true;const button=form.querySelector('button[type=submit]');const original=button?.textContent;
   if(button){button.disabled=true;button.textContent='Saving...';}
@@ -455,6 +541,8 @@ document.addEventListener('submit',async e=>{
     else if(form.id==='settings-form')await saveSettings(form);
     else if(form.id==='message-form')await sendMessage(form);
     else if(form.id==='reset-form')await resetPin(form);
+    else if(form.id==='delete-homework-form')await deleteHomeworkPermanently(form);
+    else if(form.id==='delete-student-form')await deleteStudentPermanently(form);
   }catch(err){console.error(err);toast(errorText(err),true);}
   finally{state.busy=false;if(button&&document.contains(button)){button.disabled=false;button.textContent=original;}}
 });
@@ -467,5 +555,7 @@ setInterval(()=>{
   refreshCountdowns();
   if(state.profile.role==='student')announceBrowserReminders();
 },60_000);
-setInterval(()=>{if(state.profile?.role==='student'&&!state.busy)reload().catch(console.warn);},3*60_000);
+window.addEventListener('focus',queuePortalLiveReload);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')queuePortalLiveReload();});
+setInterval(()=>{if(state.profile&&!state.busy&&document.visibilityState==='visible'&&modalRoot.hidden)queuePortalLiveReload();},90_000);
 boot();
