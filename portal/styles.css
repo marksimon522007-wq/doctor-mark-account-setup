@@ -183,3 +183,45 @@ body { background:radial-gradient(820px 550px at 83% -8%,#36281975,transparent 7
   .parent-list-title h2{font-size:22px}
   .tabs [data-mode]{font-size:13px;padding:11px 4px}
 }
+
+/* Biology groups, templates and gentle exam countdown */
+.group-filter-row{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 20px}
+.group-filter{border:1px solid #594936;border-radius:999px;background:#171819;color:#d4c8b7;cursor:pointer;font-size:13px;padding:10px 13px;line-height:1.35}
+.group-filter.active{border-color:#e1bc76;background:#3a2b19;color:#ffdfa0}
+.group-filter:hover{border-color:#bf995f}
+.student-group-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+.group-tag{border:1px solid #715b37;border-radius:999px;padding:5px 9px;background:#29251d;color:#dfc897;font-size:11px;font-weight:650}
+.group-edit-btn{border-color:#806845;color:#ecd0a0}
+.group-choice-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:11px 0;padding:13px;border:1px solid #514638;border-radius:13px;background:#151618}
+.group-choice-list .checkline{font-size:13px;line-height:1.35;color:#e3d8c7;cursor:pointer}
+.group-label{color:#e9e2d7;font-size:13px;font-weight:650}
+.homework-recipients{border:1px solid #655133!important;border-radius:13px;padding:15px!important;background:#1b1a18}
+.homework-recipients>summary{font-size:15px!important}
+.homework-recipients .helper{margin:9px 0 10px}
+.homework-recipients .all-recipient{font-weight:700;color:#f5d9a5;padding:8px 3px}
+.homework-recipients .recipient-groups{margin:10px 0}
+.homework-recipients details.individual-recipient{padding:12px 2px 0}
+.recipient-count{font-size:13px;font-weight:700;color:#b9dda6;border-top:1px solid #4a4036;padding:12px 3px 2px;margin-top:10px}
+.recipient-count.missing{color:#e9c28c}
+.template-optin{padding:12px 13px;border:1px solid #504737;border-radius:12px;background:#201d19;color:#ead8b9;font-size:13px;line-height:1.5;cursor:pointer}
+.template-list{display:grid;gap:10px;margin:18px 0;max-height:56vh;overflow:auto}
+.template-list-item{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:15px;border:1px solid #4d4539;border-radius:13px;background:#1c1d1f}
+.template-list-item strong{font-size:15px;color:#f0dfbd}
+.template-list-item p{margin-top:4px}
+.template-buttons{display:flex;gap:8px;flex-wrap:wrap}
+.exam-countdown{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;border:1px solid #84704c;border-radius:18px;background:linear-gradient(120deg,#29251d,#1a1a1c);padding:23px 25px;margin:0 0 19px}
+.exam-countdown-main{display:grid;gap:6px}
+.exam-countdown-label{color:#e7c88b;font-size:11px;font-weight:800;letter-spacing:.13em}
+.exam-countdown-count{font-family:Georgia,serif;font-size:clamp(40px,5vw,58px);color:#f8e0ac;line-height:1}
+.exam-countdown-line{font-size:17px;font-weight:650;color:#eee2d0}
+.exam-countdown-date{font-size:13px;line-height:1.5;color:#baafa0}
+.exam-countdown-hide{background:transparent;border:1px solid #665841;color:#baae9b;border-radius:9px;padding:7px 12px;font-size:12px}
+.exam-countdown-hide:hover{border-color:#b89a62;color:#ecd1a0}
+.exam-countdown-reveal{display:flex;justify-content:flex-end;margin:0 0 14px}
+@media(max-width:550px){
+  .group-choice-list{grid-template-columns:1fr}
+  .group-filter{font-size:12px;padding:9px 10px}
+  .exam-countdown{padding:20px 17px;gap:9px}
+  .exam-countdown-line{font-size:15px}
+  .template-list-item{flex-direction:column;align-items:flex-start}
+}

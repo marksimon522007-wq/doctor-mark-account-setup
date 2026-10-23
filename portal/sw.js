@@ -1,5 +1,5 @@
 /* Cache only anonymous site shell. Student data, API calls and passwords are never cached here. */
-const VERSION='drmark-whatsapp-v9-parent-view';
+const VERSION='drmark-whatsapp-v10-biology-groups';
 const STATIC=['./','./index.html','./styles.css','./app.js','./chromosome-motion.js','./config.js','./assets/k_chromosome.png','./manifest.webmanifest'];
 self.addEventListener('install',event=>{
   event.waitUntil(caches.open(VERSION).then(cache=>cache.addAll(STATIC)).catch(()=>{}));
