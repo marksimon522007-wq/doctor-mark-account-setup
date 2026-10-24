@@ -28,7 +28,7 @@ const $ = id => document.getElementById(id);
 const state = {
   user: null, profile: null, student: null, settings: {}, students: [], assignments: [],
   submissions: [], messages: [], reminders: [], parents: [], parentView: null, templates: [], roleChoice: 'student',
-  filter: 'all', groupFilter: 'all', studentSearch: '', busy: false, booted: false
+  filter: 'all', groupFilter: 'all', homeworkStudentFilter: 'all', reviewSelection: new Set(), studentSearch: '', busy: false, booted: false
 };
 const GOLD = '#d5b46c';
 const STUDY_GROUPS=Object.freeze([
@@ -193,8 +193,8 @@ async function reload(withToast=false){
   const queries=[
     sb.from('portal_settings').select('brand_name,teacher_name,subjects,default_due_time,whatsapp_number').eq('id',1).maybeSingle(),
     sb.from('portal_students').select('id,name,code,subjects,study_groups,exam_date,auth_user_id,is_active,created_at').order('created_at',{ascending:false}),
-    sb.from('portal_assignments').select('id,student_id,title,subject,topic,instructions,due_at,marks,priority,external_link,status,created_at,batch_id').order('due_at',{ascending:true}),
-    sb.from('portal_submissions').select('id,assignment_id,student_id,note,submitted_at,late,status,score,max_score,feedback,reviewed_at').order('submitted_at',{ascending:false}),
+    sb.from('portal_assignments').select('id,student_id,title,subject,topic,instructions,due_at,marks,priority,external_link,status,created_at,batch_id,is_mcq,exam_code,source_plan_key').order('due_at',{ascending:true}),
+    sb.from('portal_submissions').select('id,assignment_id,student_id,note,submitted_at,late,status,score,max_score,feedback,reviewed_at,mcq_mark,wrong_questions').order('submitted_at',{ascending:false}),
     sb.from('portal_messages').select('id,student_id,body,created_at').order('created_at',{ascending:false}).limit(250),
     sb.from('portal_deadline_reminders').select('id,assignment_id,student_id,kind,created_at').order('created_at',{ascending:false}).limit(250),
     state.profile.role==='teacher'
@@ -296,7 +296,7 @@ async function signIn(form){
     await authorize();
   }catch(e){await sb.auth.signOut();showLogin(errorText(e));}
 }
-async function logout(){stopPortalLiveSync();await sb.auth.signOut();state.user=null;state.profile=null;state.student=null;state.settings={};state.students=[];state.assignments=[];state.submissions=[];state.messages=[];state.reminders=[];state.parents=[];state.templates=[];state.parentView=null;showLogin();toast('Signed out safely.');}
+async function logout(){stopPortalLiveSync();await sb.auth.signOut();state.user=null;state.profile=null;state.student=null;state.settings={};state.students=[];state.assignments=[];state.submissions=[];state.messages=[];state.reminders=[];state.parents=[];state.templates=[];state.parentView=null;state.reviewSelection.clear();showLogin();toast('Signed out safely.');}
 function shell(html){
   const teacher=state.profile.role==='teacher';
   const name=teacher?(state.profile.full_name||'Teacher'):dr(state.student?.name||'Student');
@@ -304,10 +304,91 @@ function shell(html){
 }
 function render(){if(!state.profile){showLogin();return;}if(state.profile.role==='teacher')renderTeacher();else if(state.profile.role==='parent')renderParent();else renderStudent();}
 function panelStat(n,label,extra=''){return `<div class="panel"><div class="stat-value">${n}</div><div class="stat-label">${label}</div>${extra?`<div class="tiny-muted">${extra}</div>`:''}</div>`;}
+
+function selectedMcqReviews(){
+  return state.submissions.map(sub=>{
+    const a=state.assignments.find(work=>work.id===sub.assignment_id);
+    const student=state.students.find(st=>st.id===sub.student_id);
+    return {sub,a,student};
+  }).filter(({sub,a,student})=>
+    !!a?.is_mcq && !!student && state.reviewSelection.has(sub.id) &&
+    Number.isInteger(sub.mcq_mark) &&
+    Array.isArray(sub.wrong_questions) && sub.wrong_questions.length>0);
+}
+function updateReviewSelectionUI(){
+  const count=selectedMcqReviews().length;
+  const el=$('selected-review-count'),copy=$('copy-review-request');
+  if(el)el.textContent=count+' selected';
+  if(copy)copy.disabled=count===0;
+}
+function buildWrongQuestionPdfPrompt(){
+  const selected=selectedMcqReviews();
+  if(!selected.length)throw Error('Select at least one marked MCQ paper that has wrong questions.');
+  const ordered=[...selected].sort((x,y)=>
+    x.student.name.localeCompare(y.student.name) ||
+    String(x.a.exam_code||'').localeCompare(String(y.a.exam_code||'')));
+  const papers=ordered.map(({sub,a,student})=>{
+    const exam=String(a.exam_code||'').trim();
+    if(!/^9700\/1[1-4]\/(?:F\/M|M\/J|O\/N)\/(?:\d{2}|\d{4})$/.test(exam))
+      throw Error('A selected paper has a missing or invalid Cambridge exam code: '+a.title+'. Fix the exam code before copying.');
+    const wrong=[...sub.wrong_questions].sort((x,y)=>x-y);
+    if(!wrong.every(n=>Number.isInteger(n)&&n>=1&&n<=40) || new Set(wrong).size!==wrong.length)
+      throw Error('Invalid wrong-question numbers saved for '+a.title+'.');
+    return '- Student: '+student.name+' | Cambridge exam: '+exam+
+      ' | Student mark: '+sub.mcq_mark+'/40 | WRONG QUESTIONS: '+wrong.join(', ');
+  }).join('\n');
+  return [
+    'CREATE A CAMBRIDGE AS BIOLOGY 9700 PAPER 1 MCQ CORRECTION PDF',
+    '',
+    'Use my uploaded Library archives, not guessed questions:',
+    '• 9700_P1_Question_Papers_2010_MJ2026_CLICKABLE.pdf (original question papers)',
+    '• 9700_P1_Mark_Schemes_2010_MJ2026_CLICKABLE.pdf (official mark schemes)',
+    'The archive filenames may have a (1) suffix; locate the matching files in my Library.',
+    '',
+    'ONLY USE the exact Cambridge 9700 Paper 1 year, session, and variant listed below.',
+    'For each WRONG QUESTION NUMBER, find that original MCQ in the exact question paper.',
+    'Make ONE professionally formatted, print-ready PDF, grouped by student then by exam:',
+    '1. Show each original question at good readable resolution: original wording, all four options, any figures/tables and labels, preserved from the uploaded question-paper PDF. Do not retype or redraw complex questions.',
+    '2. Immediately BELOW that question show its official correct ANSWER LETTER (A, B, C or D), verified against the EXACT matching mark scheme for that session and variant. Optionally include a short explanation of why the answer is correct.',
+    '3. Do not include unselected questions, do not change source questions, and do not swap exams or variants. Keep the original question number visible.',
+    '4. Group and label each section clearly with student name and full exam code, with enough space for readability. There should be no ChatGPT or AI branding.',
+    '5. If any original question or answer is unavailable or ambiguous, list the missing source clearly rather than inventing it.',
+    '6. Preserve every selected student/exam/question entry; do not silently drop or merge entries.',
+    '',
+    'SELECTED STUDENT ERRORS:',
+    papers,
+    '',
+    'Deliver the finished PDF with questions followed immediately by their checked official answers.'
+  ].join('\n');
+}
+async function copySelectedMcqReviews(){
+  const prompt=buildWrongQuestionPdfPrompt();
+  await navigator.clipboard.writeText(prompt);
+  toast('Copied '+selectedMcqReviews().length+' selected paper(s). Paste into ChatGPT to create the correction PDF.');
+}
+function selectVisibleMcqReviews(){
+  document.querySelectorAll('input[data-action="review-select"]').forEach(el=>{
+    state.reviewSelection.add(el.getAttribute('data-id'));
+    el.checked=true;
+  });
+  updateReviewSelectionUI();
+}
+function clearMcqReviewSelection(){
+  state.reviewSelection.clear();
+  document.querySelectorAll('input[data-action="review-select"]').forEach(el=>{el.checked=false;});
+  updateReviewSelectionUI();
+}
+
 function teacherCard(a){
   const s=matchingSubmission(a.id),st=status(a),name=state.students.find(x=>x.id===a.student_id)?.name||'Student';
   return `<article class="work-card" data-kind="${st}"><div class="split"><div><div class="work-title">${esc(a.title)}</div><div class="work-meta"><span>${esc(name)}</span><span>&middot;</span><span>Due ${esc(fmt(a.due_at))}</span></div></div>${chip(st)}</div>
-  ${s?`<div class="submission-detail"><span class="success-dot"></span><span>${esc(dr(name))} marked this as sent ${esc(fmt(s.submitted_at))}${s.late?' (after deadline)':''}.</span></div>${s.note?`<p class="small muted">Student note: ${esc(s.note)}</p>`:''}`:`<p class="list-meta">${esc(timeLeft(a.due_at))}</p>`}
+  ${s?`<div class="submission-detail"><span class="success-dot"></span><span>${esc(dr(name))} marked this as sent ${esc(fmt(s.submitted_at))}${s.late?' (after deadline)':''}.</span></div>
+  ${a.is_mcq&&s.mcq_mark!=null?`<div class="teacher-mcq-result">
+    <div><strong>Paper 1 result: ${esc(s.mcq_mark)}/40</strong><span>Wrong questions: ${esc((s.wrong_questions||[]).join(', ')||'None')}</span></div>
+    ${(s.wrong_questions||[]).length?`<label class="review-pick"><input type="checkbox" data-action="review-select" data-id="${esc(s.id)}" ${state.reviewSelection.has(s.id)?'checked':''}> Include in correction PDF request</label>`:'<span class="mcq-perfect">No wrong questions to extract</span>'}
+  </div>`:''}
+  ${s.note?`<p class="small muted">Student note: ${esc(s.note)}</p>`:''}`:
+  `<p class="list-meta">${esc(timeLeft(a.due_at))}</p>`}
   <div class="button-row"><button class="button slim" data-action="edit-work" data-id="${esc(a.id)}">Edit homework</button>${s?`<button class="button slim ghost" data-action="feedback" data-id="${esc(s.id)}">${s.feedback||s.score!=null?'Edit feedback':'Leave feedback'}</button>`:''}${s?`<button class="button slim ghost reset-checkmark-btn" data-action="reset-submission" data-id="${esc(s.id)}">Reset sent checkmark</button>`:''}<button class="button slim ghost" data-action="archive-work" data-id="${esc(a.id)}">${a.status==='archived'?'Restore':'Archive'}</button><button class="button slim danger" data-action="delete-work" data-id="${esc(a.id)}">Delete permanently</button></div>
   ${s?.feedback?`<p class="small muted">Your feedback: ${esc(s.feedback)}</p>`:''}
   </article>`;
@@ -324,12 +405,29 @@ function teacherStudentCard(s){
 function renderTeacher(){
   const active=state.students.filter(s=>s.is_active),works=state.assignments.filter(a=>a.status!=='archived'),done=works.filter(a=>matchingSubmission(a.id)).length,
     overdue=works.filter(a=>status(a)==='overdue').length, waiting=works.length-done,
-    filtered=state.assignments.filter(a=>state.filter==='all'?a.status!=='archived':state.filter==='archived'?a.status==='archived':state.filter==='sent'?!!matchingSubmission(a.id):state.filter==='overdue'?status(a)==='overdue':!matchingSubmission(a.id)&&a.status!=='archived');
+    filtered=state.assignments.filter(a=>(state.homeworkStudentFilter==='all'||a.student_id===state.homeworkStudentFilter)&&(state.filter==='all'?a.status!=='archived':state.filter==='archived'?a.status==='archived':state.filter==='sent'?!!matchingSubmission(a.id):state.filter==='overdue'?status(a)==='overdue':!matchingSubmission(a.id)&&a.status!=='archived'));
   const sResults=state.students.filter(s=>(state.groupFilter==='all'||(s.study_groups||[]).includes(state.groupFilter))&&(s.name+' '+s.code).toLowerCase().includes(state.studentSearch.toLowerCase()));
   shell(`<section class="hero teacher-hero"><div class="hero-copy"><div class="eyebrow">TEACHER OVERVIEW</div><h1>Beautifully simple follow-up.</h1><p>Assign in seconds. Trust your students. See exactly who has finished, without managing a pile of PDFs.</p></div><img class="hero-mark" src="assets/k_chromosome.png" alt=""></section>
   <div class="button-row main-actions"><button class="button primary" data-action="new-homework" ${active.length?'':'disabled'}>+ New homework</button><button class="button" data-action="new-student">+ New student</button><button class="button ghost" data-action="templates">Homework templates</button><button class="button ghost" data-action="settings">Settings</button><button class="button ghost" data-action="refresh">Refresh</button></div>
   <section class="panels" aria-label="Overview">${panelStat(active.length,'Active students')}${panelStat(waiting,'Awaiting submission')}${panelStat(done,'Marked as sent')}${panelStat(overdue,'Overdue')}</section>
-  <section><div class="section-title"><h2>Homework</h2><span class="muted small">${works.length} assigned tasks</span></div><div class="filters">${[['all','All'],['waiting','Waiting'],['sent','Sent'],['overdue','Overdue'],['archived','Archived']].map(([id,label])=>`<button class="filter ${state.filter===id?'on':''}" data-action="filter" data-filter="${id}">${label}</button>`).join('')}</div>
+  <section><div class="section-title"><h2>Homework</h2><span class="muted small">${works.length} assigned tasks</span></div>
+  <div class="teacher-mcq-toolbar">
+    <div class="mcq-toolbar-title"><strong>Paper 1 · Wrong-question PDF</strong>
+      <span>Tick submitted MCQ papers to build one prompt for ChatGPT.</span></div>
+    <div class="mcq-toolbar-actions">
+      <span id="selected-review-count" class="review-count">${selectedMcqReviews().length} selected</span>
+      <button type="button" class="button slim ghost" data-action="review-select-visible">Select visible</button>
+      <button type="button" class="button slim ghost" data-action="review-clear">Clear</button>
+      <button type="button" class="button slim primary" id="copy-review-request" data-action="review-copy" ${selectedMcqReviews().length?'':'disabled'}>Copy selected for ChatGPT</button>
+    </div>
+  </div>
+  <label class="homework-student-filter">Show homework for:
+    <select id="homework-student-filter">
+      <option value="all">All students</option>
+      ${state.students.map(st=>`<option value="${esc(st.id)}" ${state.homeworkStudentFilter===st.id?'selected':''}>${esc(st.name)}</option>`).join('')}
+    </select>
+  </label>
+  <div class="filters">${[['all','All'],['waiting','Waiting'],['sent','Sent'],['overdue','Overdue'],['archived','Archived']].map(([id,label])=>`<button class="filter ${state.filter===id?'on':''}" data-action="filter" data-filter="${id}">${label}</button>`).join('')}</div>
   <div class="items">${filtered.length?filtered.map(teacherCard).join(''):`<div class="empty"><strong>${state.assignments.length?'Nothing in this category.':'Your next homework starts here.'}</strong><p>Only a title and a deadline are needed. We take care of the rest.</p>${!state.assignments.length?`<button class="button primary" data-action="new-homework" ${active.length?'':'disabled'} style="margin-top:15px">Add first homework</button>`:''}</div>`}</div></section>
   <section><div class="section-title"><h2>Your students</h2><button class="button slim ghost" data-action="new-student">Add student</button></div>
   <div class="group-filter-row" aria-label="Filter students by Biology group">
@@ -340,6 +438,29 @@ function renderTeacher(){
   <div id="student-results">${sResults.length?`<div class="grid2">${sResults.map(teacherStudentCard).join('')}</div>`:`<div class="empty"><strong>${state.students.length?'No matching students yet.':'A personal space for every future doctor.'}</strong><p>Add your first student. Their login code and password will be generated for you.</p></div>`}</div></section>
   <div class="notice footer-note"><strong>WhatsApp-first by design.</strong> PDFs stay in WhatsApp. Only homework details, student checkmarks, notes and timestamps are saved here.</div>`);
 }
+
+/* Paper 1 MCQ: exactly forty one-mark questions. */
+function parseWrongQuestions(value){
+  const original=String(value??'').trim();
+  if(!original)return [];
+  if(!/^[\d\s,;،]+$/.test(original))throw Error('Enter only question numbers separated by commas or spaces, such as 3, 7, 18.');
+  const numbers=original.split(/[\s,;،]+/).filter(Boolean).map(Number);
+  if(numbers.some(n=>!Number.isInteger(n)||n<1||n>40))throw Error('Question numbers must be between 1 and 40.');
+  if(new Set(numbers).size!==numbers.length)throw Error('Each wrong question number should appear only once.');
+  return numbers.sort((a,b)=>a-b);
+}
+function readMcqMarkAndQuestions(a,id){
+  if(!a.is_mcq)return {mcq_mark:null,wrong_questions:[]};
+  const markText=text($('mcq-mark-'+id)?.value);
+  if(!/^(?:[0-9]|[1-3][0-9]|40)$/.test(markText))
+    throw Error('Enter your Paper 1 mark as a whole number from 0 to 40.');
+  const mcq_mark=Number(markText);
+  const wrong_questions=parseWrongQuestions($('wrong-questions-'+id)?.value);
+  if(wrong_questions.length!==40-mcq_mark)
+    throw Error('A mark of '+mcq_mark+'/40 means '+(40-mcq_mark)+' incorrect question(s). You listed '+wrong_questions.length+'. Please check both entries.');
+  return {mcq_mark,wrong_questions};
+}
+
 function studentCard(a){
   const s=matchingSubmission(a.id),st=status(a),remainingMin=remaining(a.due_at),safe=safeUrl(a.external_link),name=state.student?.name||'Student';
   const number=String(state.settings.whatsapp_number||'').replace(/\D/g,'');
@@ -347,10 +468,22 @@ function studentCard(a){
   const waUrl=number?`https://wa.me/${number}?text=${encodeURIComponent(shareText)}`:`https://api.whatsapp.com/send?text=${encodeURIComponent(shareText)}`;
   return `<article class="work-card student-task"><div class="split"><div><div class="work-title">${esc(a.title)}</div><div class="work-meta">${a.subject?`<span>${esc(a.subject)}</span><span>&middot;</span>`:''}<span>Due ${esc(fmt(a.due_at))}</span></div></div>${chip(st)}</div>
    ${a.instructions?`<p class="task-instruction">${esc(a.instructions)}</p>`:''}${safe?`<p class="small"><a href="${esc(safe)}" target="_blank" rel="noopener noreferrer">Open teacher's link &nearr;</a></p>`:''}
-   ${s?`<div class="sent-state"><span class="sent-symbol">&#10003;</span><div><strong>Another promise kept, ${esc(dr(name))}.</strong><p class="small muted">Marked as sent ${esc(fmt(s.submitted_at))}${s.late?' &middot; after the deadline':''}</p>${s.note?`<p class="small note-saved">Your note: ${esc(s.note)}</p>`:''}${s.feedback?`<p class="small note-saved">Dr Mark: ${esc(s.feedback)}</p>`:''}${s.score!==null&&s.score!==undefined?`<p class="small note-saved">Score: ${esc(s.score)} / ${esc(s.max_score??a.marks)}</p>`:''}</div></div>`:
+   ${s?`<div class="sent-state"><span class="sent-symbol">&#10003;</span><div><strong>Another promise kept, ${esc(dr(name))}.</strong><p class="small muted">Marked as sent ${esc(fmt(s.submitted_at))}${s.late?' &middot; after the deadline':''}</p>${s.note?`<p class="small note-saved">Your note: ${esc(s.note)}</p>`:''}${s.feedback?`<p class="small note-saved">Dr Mark: ${esc(s.feedback)}</p>`:''}${s.score!==null&&s.score!==undefined?`<p class="small note-saved">Score: ${esc(s.score)} / ${esc(s.max_score??a.marks)}</p>`:''}
+   ${a.is_mcq&&s.mcq_mark!=null?`<div class="mcq-sent-result"><strong>Your MCQ mark: ${esc(s.mcq_mark)}/40</strong><span>Wrong questions: ${esc((s.wrong_questions||[]).join(', ')||'None · full marks')}</span></div>`:''}</div></div>`:
    `<div class="task-steps"><span class="small muted">${remainingMin>0?`<strong data-due="${esc(a.due_at)}">${esc(timeLeft(a.due_at))}</strong> &middot; `:''}Send your PDF on WhatsApp, then tick below.</span>
    <a class="button whatsapp-link" href="${esc(waUrl)}" target="_blank" rel="noopener noreferrer">Open WhatsApp &nearr;</a></div>
    <div class="quote-card"><span class="quote-mark">&ldquo;</span>There is always an excuse to submit late. And there is always a way to submit on time.<span class="quote-mark">&rdquo;</span></div>
+   ${a.is_mcq?`<div class="mcq-entry">
+      <strong>Paper 1 · 40 questions</strong>
+      <p class="small muted">Enter the mark you got and the exact question numbers you answered incorrectly.</p>
+      <div class="mcq-input-grid">
+        <label class="field">Your mark /40 <span class="required">*</span>
+          <input id="mcq-mark-${esc(a.id)}" type="number" min="0" max="40" step="1" inputmode="numeric" placeholder="e.g. 36" aria-label="Mark out of 40"></label>
+        <label class="field">Wrong question numbers
+          <input id="wrong-questions-${esc(a.id)}" type="text" inputmode="text" maxlength="150" placeholder="e.g. 3, 7, 18, 25" aria-label="Wrong question numbers"></label>
+      </div>
+      <p class="helper">For example, 36/40 means four wrong questions. If you scored 40/40, leave the wrong-questions box empty.</p>
+    </div>`:''}
    <label class="field optional-note">Optional note<textarea id="note-${esc(a.id)}" rows="2" maxlength="1500" placeholder="Anything you want Dr Mark to know? (optional)"></textarea></label>
    <label class="submit-check"><input type="checkbox" data-action="submit-work" data-id="${esc(a.id)}"><span>I've sent my work on WhatsApp</span></label>`}
   </article>`;
@@ -525,6 +658,8 @@ function homeworkModal(a=null,templateId=''){
       <label class="field">Subject <small>Optional</small><input name="subject" maxlength="90" placeholder="e.g. AS Biology" value="${esc(target.subject||'')}"></label>
       <label class="field">Instructions <small>Optional</small><textarea name="instructions" maxlength="4000" rows="3" placeholder="Optional instructions">${esc(target.instructions||'')}</textarea></label>
       <label class="field">Link to a reference or past paper <small>Optional</small><input name="external_link" type="url" placeholder="https://" value="${esc(target.external_link||'')}"></label>
+      <label class="checkline mcq-option"><input type="checkbox" name="is_mcq" ${a?.is_mcq?'checked':''}> This is a 40-question Paper 1 MCQ (students enter mark /40 and wrong questions)</label>
+      <label class="field">Exact Cambridge exam code <small>For Paper 1 MCQs, e.g. 9700/12/M/J/25</small><input name="exam_code" maxlength="35" placeholder="9700/12/M/J/25" value="${esc(a?.exam_code||'')}"></label>
       </div></details>
     ${!a?`<label class="checkline template-optin"><input type="checkbox" name="save_template">
       Save this title and its optional details as a reusable template</label>`:''}
@@ -704,11 +839,18 @@ async function createOrEditHomework(form){
     link=text(fd.get('external_link'));
   if(!title)throw Error('The homework title is required.');
   if(link&&!safeUrl(link))throw Error('The link needs to start with https:// or http://');
+  const is_mcq=fd.get('is_mcq')==='on';
+  const exam_code=text(fd.get('exam_code')).toUpperCase();
+  if(is_mcq && !/^9700\/1[1-4]\/(?:F\/M|M\/J|O\/N)\/(?:\d{2}|\d{4})$/.test(exam_code))
+    throw Error('For Paper 1 MCQ homework, enter the exact exam code such as 9700/12/M/J/25.');
   const base={
     title,due_at,
     subject:text(fd.get('subject'))||null,
     instructions:text(fd.get('instructions')),
-    external_link:link||null
+    external_link:link||null,
+    is_mcq,
+    exam_code:is_mcq?exam_code:null,
+    marks:is_mcq?40:10
   };
   if(id){
     const {data,error}=await sb.from('portal_assignments').update(base).eq('id',id).select('id');
@@ -720,7 +862,7 @@ async function createOrEditHomework(form){
   const ids=selectedHomeworkStudents(form);
   if(!ids.length)throw Error('Choose at least one student or Biology group.');
   const batch_id=crypto.randomUUID();
-  const rows=ids.map(student_id=>({...base,student_id,batch_id,status:'open',priority:'Normal',marks:10}));
+  const rows=ids.map(student_id=>({...base,student_id,batch_id,status:'open',priority:'Normal'}));
   ok(await sb.from('portal_assignments').insert(rows));
   let templateError='';
   if(fd.get('save_template')==='on'){
@@ -763,8 +905,9 @@ async function studentSubmit(checkbox){
   checkbox.disabled=true;
   const note=text($('note-'+id)?.value).slice(0,1500);
   try{
+    const mcq=readMcqMarkAndQuestions(a,id);
     await requireMatchingPortalSession('student');
-    ok(await sb.from('portal_submissions').insert({assignment_id:id,student_id:state.student.id,attempt_no:1,note:note||null,status:'submitted'}));
+    ok(await sb.from('portal_submissions').insert({assignment_id:id,student_id:state.student.id,attempt_no:1,note:note||null,status:'submitted',...mcq}));
     await reload();toast('Another promise kept, '+dr(state.student.name)+'.');
   }catch(e){checkbox.disabled=false;checkbox.checked=false;toast(errorText(e),true);}
 }
@@ -879,6 +1022,9 @@ document.addEventListener('click',async e=>{
     else if(action==='delete-template')await deleteHomeworkTemplate(id);
     else if(action==='student-settings')studentSettingsModal(id);
     else if(action==='reset-submission')await resetSentCheckmark(id);
+    else if(action==='review-select-visible')selectVisibleMcqReviews();
+    else if(action==='review-clear')clearMcqReviewSelection();
+    else if(action==='review-copy')await copySelectedMcqReviews();
     else if(action==='group-filter'){state.groupFilter=el.getAttribute('data-group')||'all';renderTeacher();}
     else if(action==='exam-countdown-hide')toggleExamCountdown(true);
     else if(action==='exam-countdown-show')toggleExamCountdown(false);
@@ -918,6 +1064,13 @@ document.addEventListener('change',e=>{
   if(el.id==='all-students'){
     modalRoot.querySelectorAll('input[name=student_ids]').forEach(c=>c.checked=el.checked);
     updateRecipientCount();
+  }else if(el.id==='homework-student-filter'){
+    state.homeworkStudentFilter=el.value;renderTeacher();
+  }else if(el.matches('input[data-action="review-select"]')){
+    const id=el.getAttribute('data-id');
+    if(el.checked)state.reviewSelection.add(id);
+    else state.reviewSelection.delete(id);
+    updateReviewSelectionUI();
   }else if(el.id==='homework-template-choice'){
     if(el.value)fillHomeworkFromTemplate(el.value);
   }else if(el.matches('#homework-form input[name=student_ids], #homework-form input[name=recipient_groups]')){

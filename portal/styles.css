@@ -225,3 +225,39 @@ body { background:radial-gradient(820px 550px at 83% -8%,#36281975,transparent 7
   .exam-countdown-line{font-size:15px}
   .template-list-item{flex-direction:column;align-items:flex-start}
 }
+
+/* Paper 1 MCQ grading and selective Cambridge correction-packet workflow. */
+.mcq-entry{margin:18px 0 12px;padding:17px;border:1px solid #856b46;border-radius:15px;background:linear-gradient(145deg,#29241d,#1b1b1c)}
+.mcq-entry>strong{display:block;color:#f6d79d;font-size:16px;margin-bottom:6px}
+.mcq-entry>.muted{color:#c4bbac;line-height:1.5}
+.mcq-input-grid{display:grid;grid-template-columns:minmax(140px,.52fr) 1fr;gap:13px;margin:14px 0}
+.mcq-input-grid .field{font-size:13px;color:#ecdbc1}
+.mcq-input-grid input{font-size:17px!important;min-height:51px}
+.mcq-entry .helper{font-size:12px;color:#c2b6a4;line-height:1.55}
+.mcq-sent-result{display:flex;flex-direction:column;gap:5px;padding:12px 0;margin-top:8px;border-top:1px solid #4f4938;color:#d3e4bf}
+.mcq-sent-result strong{color:#efdfb4}
+.mcq-sent-result span{font-size:13px;color:#d2c8b6}
+.teacher-mcq-result{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;flex-wrap:wrap;margin:14px 0;border:1px solid #766143;border-radius:12px;padding:15px;background:#26221d}
+.teacher-mcq-result>div:first-child{display:flex;flex-direction:column;gap:6px}
+.teacher-mcq-result strong{font-size:15px;color:#f0d8a9}
+.teacher-mcq-result span{font-size:13px;color:#d0c4b2}
+.review-pick{display:flex;gap:10px;align-items:center;background:#40321f;color:#f2dcaf;border-radius:12px;padding:11px 13px;font-weight:650;font-size:13px;cursor:pointer;border:1px solid #866637}
+.review-pick input{width:19px;height:19px;flex:none;accent-color:#e5bb76}
+.mcq-perfect{color:#b0d2aa!important;font-weight:600}
+.teacher-mcq-toolbar{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;border:1px solid #79623e;background:linear-gradient(140deg,#30271b,#1b1c1d);border-radius:16px;padding:16px;margin:16px 0;position:sticky;top:10px;z-index:8;box-shadow:0 8px 28px #0007}
+.mcq-toolbar-title{display:flex;flex-direction:column;gap:5px}
+.mcq-toolbar-title strong{color:#f4dab2;font-size:16px}
+.mcq-toolbar-title span{color:#c2b6a8;font-size:12px;line-height:1.5}
+.mcq-toolbar-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap}
+.review-count{border:1px solid #8a713f;border-radius:999px;color:#e6c892;padding:7px 10px;font-weight:750;font-size:12px;white-space:nowrap}
+.mcq-toolbar-actions .button[disabled]{opacity:.45;cursor:not-allowed}
+.homework-student-filter{display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin:15px 0;color:#d8c7ab;font-size:13px;font-weight:650}
+.homework-student-filter select{min-height:42px;background:#121418;color:#f4e6d0;border:1px solid #68553d;border-radius:10px;padding:8px 12px;min-width:180px;max-width:100%}
+.mcq-option{margin:10px 0;gap:10px;line-height:1.5;color:#f1d49e!important;font-weight:650}
+@media(max-width:620px){
+  .mcq-input-grid{grid-template-columns:1fr;gap:11px}
+  .teacher-mcq-toolbar{position:relative;top:auto;padding:14px}
+  .mcq-toolbar-actions{justify-content:flex-start}
+  .mcq-toolbar-actions .button{font-size:12px}
+  .teacher-mcq-result{flex-direction:column}
+}
